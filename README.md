@@ -12,13 +12,34 @@ This repository serves as a centralized collection of reusable Claude Code confi
 ## Repository Structure
 
 ```
-claude_code/
-├── claude_agents/          # Custom agent configurations
+gh_claude_code/
+├── claude_agents/              # Custom agent configurations
 │   ├── security-expert.md
 │   ├── jwt-expert.md
 │   ├── gitlab-cicd-expert.md
-│   └── test-orchastrator.md
-├── claude_skills/          # Skill documents and frameworks
+│   ├── test-orchastrator.md
+│   ├── sprint-worker.md        # Sprint task executor
+│   └── tdd-modular-architect.md # TDD workflow expert
+├── claude_commands/            # SDLC workflow commands
+│   ├── project/                # Specification commands
+│   │   ├── constitution.md     # Project principles
+│   │   ├── prd.md              # Product requirements
+│   │   ├── srs.md              # Technical design
+│   │   ├── scrum.md            # Task breakdown
+│   │   ├── validate.md         # Spec validation
+│   │   ├── ux.md               # UX specification
+│   │   ├── ui.md               # UI implementation plan
+│   │   ├── add.md              # Feature addition
+│   │   ├── audit.md            # Spec audit
+│   │   ├── migrate.md          # Format migration
+│   │   └── prd_signoff.md      # PRD sign-off
+│   └── session/                # Sprint execution commands
+│       ├── init.md             # Project initialization
+│       ├── plan.md             # Task graph creation
+│       ├── implement.md        # Sequential execution
+│       ├── parallel.md         # Parallel execution
+│       └── end.md              # Sprint closeout
+├── claude_skills/              # Skill documents and frameworks
 │   ├── threat-modeling-expert.md
 │   └── project-initialization-skill.md
 ├── LICENSE
@@ -76,6 +97,115 @@ TDD expert guiding comprehensive test coverage through incremental development:
 
 **Use Cases**: TDD implementation, test suite creation, test coverage improvement, test structure guidance
 
+### Sprint Worker
+**Location**: `claude_agents/sprint-worker.md`
+
+Specialized agent for executing individual sprint tasks with strict TDD workflow:
+- Red-Green-Refactor cycle execution
+- Context management and task isolation
+- GitLab issue integration
+- Quality gates (80% coverage, 100% pass rate)
+- Checkpoint creation for context recovery
+
+**Use Cases**: Used by `/session:parallel` for concurrent worker processes, individual task execution with TDD
+
+### TDD Modular Architect
+**Location**: `claude_agents/tdd-modular-architect.md`
+
+Expert in Test-Driven Development for modular architectures and component-based systems:
+- Test-first development methodology
+- Modular architecture design patterns
+- Red-Green-Refactor workflow guidance
+- Test suite architecture for microservices
+- Component isolation and integration testing strategies
+
+**Use Cases**: TDD implementation, modular architecture design, test strategy planning, component-based system development
+
+## SDLC Workflow Commands
+
+This repository includes a comprehensive set of commands for managing the full Software Development Lifecycle using the **spec-kit methodology**.
+
+### Spec-Kit Directory Structure
+
+All specifications are stored in a `.specify/` directory:
+
+```
+.specify/
+├── memory/
+│   └── constitution.md           # Project principles and standards
+└── specs/
+    └── {feature-name}/
+        ├── spec.md               # Product requirements (PRD)
+        ├── plan.md               # Implementation plan (SRS)
+        ├── data-model.md         # Database schemas
+        ├── contracts/
+        │   └── rest-api.yaml     # API specifications
+        ├── tasks.md              # Sprint task breakdown
+        ├── research.md           # Technology investigation
+        └── quickstart.md         # Validation scenarios
+```
+
+### Workflow Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      SPECIFICATION PHASE                             │
+│  /project:constitution → /project:prd → /project:srs → /project:scrum │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                       EXECUTION PHASE                                │
+│   /session:init → /session:plan → /session:implement OR parallel     │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                       CLOSEOUT PHASE                                 │
+│                        /session:end                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Project Commands
+
+Commands for creating long-lived specification artifacts.
+
+| Command | Description | Output |
+|---------|-------------|--------|
+| `/project:constitution` | Establish project principles, code standards, and forbidden patterns | `.specify/memory/constitution.md` |
+| `/project:prd` | Create Product Requirements Document following spec-kit methodology | `.specify/specs/{feature}/spec.md` |
+| `/project:srs` | Generate Implementation Plan and Technical Design Specification | `plan.md`, `data-model.md`, `contracts/` |
+| `/project:scrum` | Generate sprint-ready task breakdown from implementation plan | `.specify/specs/{feature}/tasks.md` |
+| `/project:validate` | Validate specifications against project constitution | Validation report |
+| `/project:ux` | Create UX specification and research document | UX research document |
+| `/project:ui` | Create UI implementation plan from UXCanvas designs | `ui-implementation-*.md` |
+| `/project:add` | Add feature with multi-expert evaluation (PM, Architect, UX, Scrum) | Updated documentation |
+| `/project:audit` | Audit specifications for completeness and consistency | Audit report |
+| `/project:migrate` | Convert legacy document format to spec-kit structure | Updated directory structure |
+| `/project:prd_signoff` | PRD sign-off workflow with stakeholder approval | Sign-off documentation |
+
+### Session Commands
+
+Commands for sprint execution and session management.
+
+| Command | Description | Key Features |
+|---------|-------------|--------------|
+| `/session:init` | Initialize project for AI-assisted development | Directory structure, CLAUDE.md, git setup, module registry |
+| `/session:plan` | Create sprint task graph with dependencies | DAG generation, critical path analysis, prerequisite validation |
+| `/session:implement` | Sequential task execution with TDD workflow | Red-Green-Refactor, checkpoint/resume, `--start-from TASK-ID` |
+| `/session:parallel` | Parallel execution with git worktrees | 3-5 concurrent workers, task queue, context exhaustion detection |
+| `/session:end` | Sprint closeout with validation gates | 80% coverage gate, test quality validation, documentation |
+
+#### Session Command Arguments
+
+**`/session:implement`**:
+```
+/session:implement [sprint-number] [--resume] [--dry-run] [--skip-gitlab] [--start-from TASK-ID]
+```
+
+**`/session:parallel`**:
+```
+/session:parallel [sprint-number] [--dry-run] [--max-workers N] [--resume] [--cleanup]
+```
+
 ## Available Skills
 
 ### Threat Modeling Expert
@@ -109,6 +239,47 @@ A comprehensive framework for initializing software projects with Claude Code, i
 2. **Invoke in Claude Code**: Use the agent within Claude Code sessions
    ```
    "Can you review this code for security vulnerabilities using the security-expert agent?"
+   ```
+
+### Using SDLC Commands
+
+1. **Copy Commands**: Copy the command directories to your project's `.claude/commands/` directory
+   ```bash
+   cp -r claude_commands/ /path/to/your/project/.claude/commands/
+   ```
+
+2. **Typical Workflow**:
+   ```bash
+   # 1. Initialize a new project
+   /session:init
+
+   # 2. Create project constitution (first time only)
+   /project:constitution
+
+   # 3. Create feature specification
+   /project:prd
+
+   # 4. Generate implementation plan
+   /project:srs
+
+   # 5. Create sprint tasks
+   /project:scrum
+
+   # 6. Plan the sprint
+   /session:plan
+
+   # 7. Execute tasks (choose one)
+   /session:implement              # Sequential execution
+   /session:parallel --max-workers 3  # Parallel execution
+
+   # 8. Close out the sprint
+   /session:end
+   ```
+
+3. **Resume Interrupted Work**:
+   ```bash
+   /session:implement --resume
+   /session:implement --start-from TASK-003
    ```
 
 ### Using Skills
