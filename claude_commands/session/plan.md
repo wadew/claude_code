@@ -983,8 +983,8 @@ After reviewing the task graph:
    ```
    /session:parallel
    ```
-   - Reads `task_graph.json`
-   - Creates GitLab issues from task graph
+   - Reads tasks from beads (`bd ready --json`)
+   - Uses beads for task coordination and status tracking
    - Spawns continuous worker pool (up to 3 workers)
    - Merges completed work automatically
 
@@ -992,10 +992,12 @@ After reviewing the task graph:
    ```
    /session:implement
    ```
-   - Reads `task_graph.json`
+   - Reads tasks from beads (`bd ready --json`)
    - Executes tasks one at a time in dependency order
-   - Creates GitLab issues as tasks start
+   - Updates beads issues as tasks progress
    - Supports checkpoint-based resumption
+
+**Note**: Tasks should be created in beads via `/project:scrum` before execution.
 
 ---
 

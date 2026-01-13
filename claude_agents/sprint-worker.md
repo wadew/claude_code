@@ -2,7 +2,7 @@
 name: sprint-worker
 description: Autonomous sprint task executor - respects project CLAUDE.md rules. Use for parallel sprint execution via /session:parallel.
 model: opus
-tools: Read, Edit, Bash(git:*), Grep, Glob, mcp__gitlab-mcp__update_issue
+tools: Read, Edit, Bash(git:*), Grep, Glob
 ---
 
 You are an autonomous sprint task executor working as part of a parallel execution system.
@@ -45,7 +45,7 @@ You receive task details via `--append-system-prompt` as JSON:
   "sprint_id": "05",
   "branch": "feature/sprint-05-t-001",
   "worktree_path": "/Users/user/Code/project-worktrees/sprint-05-t-001",
-  "gitlab_issue": 42
+  "beads_id": "bd-a1b2"
 }
 ```
 
@@ -60,7 +60,7 @@ Before starting implementation:
 1. Parse the task JSON from your system prompt (REQUIRED)
 2. Read `CLAUDE.md` in the project root for project-specific rules
 3. Read `state/current_state.md` for sprint context (if exists)
-4. Read `sprints/sprint_{id}/task_graph.json` for dependency details (if needed)
+4. Run `bd show {beads_id}` for dependency details (if needed)
 5. If `srs_ref` is provided, read relevant lines from SRS document
 6. If `ui_ref` is provided, read relevant lines from UI document
 
@@ -146,8 +146,7 @@ Verify:
 git add .
 git commit -m "feat({domain}): {task_title}
 
-Implements: #{gitlab_issue}
-Task: {task_id}
+Task: {task_id} ({beads_id})
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 
@@ -157,12 +156,13 @@ git push -u origin HEAD
 
 **Note**: You're in an isolated worktree - pushing won't affect other workers.
 
-### 6. Update GitLab Issue
+### 6. Update Beads Issue
 
-Use the `mcp__gitlab-mcp__update_issue` tool:
-- Remove `pending` or `in-progress` label
-- Add `done` label
-- Add comment with implementation summary
+Update the beads issue status:
+```bash
+# Mark task as done
+bd close {beads_id} --reason "Implementation complete"
+```
 
 ## Token Budget Management
 
@@ -194,7 +194,7 @@ If you detect context exhaustion approaching:
   "status": "success|failed|blocked",
   "task_id": "T-001",
   "branch": "feature/sprint-05-t-001",
-  "gitlab_issue": 42,
+  "beads_id": "bd-a1b2",
   "commits": 3,
   "tests_passed": 15,
   "tests_added": 5,
@@ -265,7 +265,7 @@ When blocked or failed:
 If your task has dependencies (`task.dependencies` is non-empty):
 1. The orchestrator should have ensured dependencies completed
 2. If you find missing dependencies, report as `"blocked"`
-3. Check `state/parallel_execution.json` to verify dependency status
+3. Run `bd dep list {beads_id}` to verify dependency status
 
 If your task has dependents (`task.dependents` is non-empty):
 1. Ensure your public interfaces are well-defined

@@ -1090,9 +1090,30 @@ Identify risks for each sprint:
 - HIGH: Any risk > 15, critical unknowns
 ```
 
-# PHASE 7: TASKS.MD GENERATION
+# PHASE 7: BEADS INITIALIZATION & TASKS.MD GENERATION
 
-## Step 7A: Ensure Directory Structure
+## Step 7A: Initialize Beads for Task Tracking
+
+Beads provides collision-free task coordination for multi-agent sessions. Initialize beads if not already present:
+
+```bash
+# Check if beads is initialized
+if [ ! -d ".beads" ]; then
+    echo "Initializing beads for task tracking..."
+    bd init
+    echo "✅ Beads initialized"
+else
+    echo "✅ Beads already initialized"
+fi
+```
+
+**Why Beads?**
+- Hash-based IDs prevent merge conflicts in multi-agent mode
+- `bd ready` auto-computes tasks with no blocking dependencies
+- Git-backed JSONL provides audit trail and version control
+- Native dependency graph replaces manual task_graph.json parsing
+
+## Step 7B: Ensure Directory Structure
 
 Create the `.specify/` directory structure if not already present:
 
@@ -1517,7 +1538,91 @@ flowchart TD
 - [ ] Acceptance criteria verified by PO
 ```
 
-## Step 7C: Context Optimization Checklist
+## Step 7C: Create Beads Issues from Tasks
+
+After generating tasks.md, create corresponding beads issues for execution tracking:
+
+### Create Feature Epic
+
+```bash
+# Create epic-level issue for the feature
+EPIC_ID=$(bd create "{Feature Name}" \
+    --type epic \
+    --priority 1 \
+    --description "Feature specification: .specify/specs/{feature-name}/spec.md" \
+    --json | jq -r '.id')
+
+echo "Created epic: $EPIC_ID"
+```
+
+### Create Task Issues
+
+For each task in tasks.md, create a corresponding beads issue:
+
+```bash
+# Example for T-001
+TASK_ID=$(bd create "T-001: {Task Title}" \
+    --type task \
+    --priority {0|1|2} \
+    --description "{Task description}" \
+    --estimated-minutes {hours * 60} \
+    --json | jq -r '.id')
+
+# Link to epic via parent-child relationship
+bd dep add $TASK_ID $EPIC_ID --type parent-child
+
+# Add traceability to spec requirements
+bd update $TASK_ID --external-ref "FR-001,.specify/specs/{feature}/spec.md"
+```
+
+### Create Dependencies
+
+For tasks with dependencies (from the task graph):
+
+```bash
+# Example: T-003 depends on T-001 and T-002
+bd dep add bd-{T003-hash} bd-{T001-hash} --type blocks
+bd dep add bd-{T003-hash} bd-{T002-hash} --type blocks
+```
+
+### Verify Beads State
+
+After creating all issues:
+
+```bash
+# Verify issue count matches tasks.md
+bd list --json | jq 'length'
+
+# Verify ready tasks (should show tasks with no blockers)
+bd ready --json | jq '.[].title'
+
+# Sync to git
+bd sync
+```
+
+### Beads Issue Schema for Tasks
+
+Each task becomes a beads issue with this structure:
+
+```json
+{
+    "id": "bd-xxxx",
+    "title": "T-001: {Task Title}",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "description": "{From tasks.md acceptance criteria}",
+    "design": "{Implementation approach from tasks.md}",
+    "acceptance_criteria": "- [ ] Criterion 1\n- [ ] Criterion 2",
+    "estimated_minutes": 120,
+    "external_ref": "FR-001",
+    "labels": ["domain:backend", "complexity:standard", "sprint:1"]
+}
+```
+
+**Note**: tasks.md is still generated for human readability and sprint planning visibility. Beads becomes the source of truth for execution tracking.
+
+## Step 7D: Context Optimization Checklist
 
 Ensure tasks.md is optimized for AI agent consumption:
 
@@ -1675,38 +1780,47 @@ Ensure all ambiguities from spec.md and plan.md are resolved:
 
 When you invoke this `/project:scrum` command, you will:
 
-1. **Locate spec-kit documents** in `.specify/specs/{feature}/`
+1. **Initialize beads** if not already present
+   - Run `bd init` to create `.beads/` directory
+   - Beads provides collision-free task tracking for multi-agent work
+2. **Locate spec-kit documents** in `.specify/specs/{feature}/`
    - Read spec.md for requirements and user stories
    - Read plan.md for technical architecture
    - Read data-model.md for database context
    - Read contracts/ for API specifications
-2. **Verify prerequisites**
+3. **Verify prerequisites**
    - Check constitution exists at `.specify/memory/constitution.md`
    - Warn if spec.md or plan.md missing
    - Offer migration if legacy format detected
-3. **Extract requirements** from spec.md
+4. **Extract requirements** from spec.md
    - Parse FR-xxx functional requirements
    - Parse NFR-xxx non-functional requirements
    - Parse US-xxx user stories with acceptance criteria
-4. **Create implementation tasks**
+5. **Create implementation tasks**
    - Break down requirements into T-xxx tasks
    - Assign domain (backend/frontend/tests/infra)
    - Estimate complexity (simple/standard/complex)
    - Calculate estimated hours
-5. **Build dependency graph**
+6. **Build dependency graph**
    - Analyze task dependencies
    - Create Mermaid flowchart
    - Identify parallelizable work
    - Detect circular dependencies
-6. **Generate tasks.md**
+7. **Generate tasks.md** (for human readability)
    - Output to `.specify/specs/{feature}/tasks.md`
    - Include task graph, task details, sprint allocation
    - Add traceability matrix
    - Include constitution compliance check
-7. **Validate output**
+8. **Create beads issues** (source of truth for execution)
+   - Create epic issue for feature
+   - Create task issues with dependencies
+   - Link to spec requirements via external_ref
+   - Sync to git via `bd sync`
+9. **Validate output**
    - Ensure all requirements mapped to tasks
    - Verify no [NEEDS CLARIFICATION] items unresolved
    - Check estimated hours within sprint capacity
+   - Verify beads issues match tasks.md count
 
 ## Output File
 
@@ -1734,16 +1848,37 @@ When you invoke this `/project:scrum` command, you will:
 ✅ Constitution compliance verified
 ✅ All [NEEDS CLARIFICATION] items resolved
 ✅ Traceability matrix complete
+✅ **Beads issues created** matching tasks.md task count
+✅ **Beads dependencies** matching task graph
+✅ **`bd ready`** returns expected unblocked tasks
+✅ **`bd sync`** completed successfully
 ✅ Ready for `/session:plan` and `/session:implement`
 
 ## Integration with Session Commands
 
-The generated `tasks.md` is consumed by:
+The generated `tasks.md` and beads issues are consumed by:
 
-- **`/session:plan`** - Reads task graph, selects next tasks to work on
-- **`/session:implement`** - Updates task status as work progresses
-- **`/session:parallel`** - Identifies parallelizable tasks for multi-agent work
-- **`/session:end`** - Marks completed tasks, generates session summary
+- **`/session:plan`** - Reads beads issues via `bd ready --json`, selects next tasks
+- **`/session:implement`** - Updates beads issue status (`bd update`, `bd close`)
+- **`/session:parallel`** - Uses `bd ready` to identify parallelizable tasks for multi-agent work
+- **`/session:end`** - Runs `bd doctor` for orphan detection, `bd sync` at completion
+
+**Beads Task Lifecycle**:
+```
+/project:scrum creates issues
+    ↓
+/session:plan reads `bd ready --json`
+    ↓
+/session:implement or /session:parallel
+    - Worker claims: `bd update bd-xxx --status in_progress`
+    - Worker completes: `bd close bd-xxx --reason "Done"`
+    - Sync changes: `bd sync`
+    ↓
+/session:end
+    - Verify all closed: `bd list --json | jq '.[] | select(.status == "open")'`
+    - Check for orphans: `bd doctor`
+    - Final sync: `bd sync`
+```
 
 ---
 

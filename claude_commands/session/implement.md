@@ -9,125 +9,136 @@ You are executing a sprint's tasks **sequentially** from a pre-generated task gr
 ## ARGUMENTS
 
 ```
-/session:implement [sprint-number] [--resume] [--dry-run] [--skip-gitlab] [--start-from TASK-ID]
+/session:implement [sprint-number] [--resume] [--dry-run] [--start-from TASK-ID]
 ```
 
 - `sprint-number`: Sprint to execute (e.g., `5` for sprint 5). Default: detect from `state/current_state.md`
 - `--resume`: Resume from last checkpoint (reads `execution_checkpoint.json`)
 - `--dry-run`: Show execution plan without running tasks
 - `--start-from`: Start from a specific task ID (skips prior tasks)
-- `--skip-gitlab`: Don't create/update GitLab issues
 
 ---
 
-# PHASE 6: LOAD TASK GRAPH
+# PHASE 6: LOAD TASKS FROM BEADS
 
-## Step 6A: Locate Task Graph
+## Step 6A: Verify Beads Initialized
 
-### Spec-Kit Format (Preferred)
+**Beads is the primary source of truth for task tracking.**
 
-```python
-def locate_task_graph(feature_name=None, sprint_number=None):
-    """Find the task graph file, preferring spec-kit format."""
+```bash
+# Check beads is initialized
+if [ ! -d ".beads" ]; then
+    echo "❌ Beads not initialized."
+    echo "   Run /project:scrum to create tasks in beads."
+    exit 1
+fi
 
-    # First, check for spec-kit tasks.md files
-    spec_kit_paths = glob.glob(".specify/specs/*/tasks.md")
-
-    if spec_kit_paths:
-        if feature_name:
-            # Look for specific feature
-            feature_path = f".specify/specs/{feature_name}/tasks.md"
-            if os.path.exists(feature_path):
-                return ("spec-kit", feature_path)
-        elif len(spec_kit_paths) == 1:
-            # Single feature, use it
-            return ("spec-kit", spec_kit_paths[0])
-        else:
-            # Multiple features, need to select
-            print("Multiple features found:")
-            for i, path in enumerate(spec_kit_paths):
-                feature = path.split("/")[2]
-                print(f"  {i+1}. {feature}")
-            print("\nSpecify feature: /session:implement --feature {name}")
-            return None
-
-    # Fallback to legacy format
-    legacy_paths = [
-        f"sprints/sprint_{sprint_number:02d}/task_graph.json" if sprint_number else None,
-        f"sprints/sprint_{sprint_number}/task_graph.json" if sprint_number else None,
-        "state/task_graph.json"
-    ]
-    for path in [p for p in legacy_paths if p]:
-        if os.path.exists(path):
-            print(f"ℹ️ Using legacy task graph format: {path}")
-            print("   Consider running /project:scrum to generate tasks.md")
-            return ("legacy", path)
-
-    raise FileNotFoundError(
-        "Task graph not found.\n"
-        "  - For spec-kit: Run /project:scrum to generate .specify/specs/{feature}/tasks.md\n"
-        "  - For legacy: Run /session:plan to generate task_graph.json"
-    )
+# Check for ready tasks
+bd ready
 ```
 
-### Spec-Kit tasks.md Parsing
+## Step 6B: Load Tasks from Beads
 
 ```python
-def parse_spec_kit_tasks(tasks_md_path):
-    """Parse spec-kit tasks.md file into task graph structure."""
-    with open(tasks_md_path) as f:
-        content = f.read()
+import subprocess
+import json
 
+def load_tasks_from_beads():
+    """Load all tasks from beads - the source of truth for task tracking."""
+
+    # Get all open issues from beads
+    result = subprocess.run(
+        ["bd", "list", "--json"],
+        capture_output=True, text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError("Failed to load tasks from beads. Is beads initialized?")
+
+    all_issues = json.loads(result.stdout) if result.stdout else []
+
+    # Filter to open tasks only (not epics, not closed)
     tasks = {}
-    current_task = None
+    for issue in all_issues:
+        if issue["status"] == "closed":
+            continue
+        if issue.get("issue_type") == "epic":
+            continue
 
-    # Parse task blocks (T-XXX format)
-    task_pattern = r"### (T-\d+): (.+)"
-    for match in re.finditer(task_pattern, content):
-        task_id = match.group(1)
-        title = match.group(2)
-        # Extract task details from following lines
+        task_id = issue["id"]
         tasks[task_id] = {
             "id": task_id,
-            "title": title,
-            "status": "pending",  # Parse from content
-            "domain": "",         # Parse from content
-            "complexity": "",     # Parse from content
-            "dependencies": [],   # Parse from content
-            "estimated_hours": 0, # Parse from content
-            "files_affected": [], # Parse from content
-            "acceptance_criteria": [],
-            "tests": [],
-            "references": []
+            "title": issue["title"],
+            "description": issue.get("description", ""),
+            "status": issue["status"],
+            "priority": issue.get("priority", 2),
+            "complexity": get_label_value(issue, "complexity", "standard"),
+            "domain": get_label_value(issue, "domain", "backend"),
+            "dependencies": [],  # Will be populated from deps
+            "estimated_minutes": issue.get("estimate", 60),
+            "external_ref": issue.get("external_ref", ""),
         }
 
-    return {"format": "spec-kit", "tasks": tasks}
+    # Load dependencies for each task
+    for task_id in tasks:
+        deps_result = subprocess.run(
+            ["bd", "dep", "list", task_id, "--json"],
+            capture_output=True, text=True
+        )
+        if deps_result.stdout:
+            deps = json.loads(deps_result.stdout)
+            for dep in deps:
+                if dep.get("type") == "blocks":
+                    tasks[task_id]["dependencies"].append(dep["target"])
+
+    return {"format": "beads", "tasks": tasks}
+
+def get_label_value(issue, prefix, default):
+    """Extract label value like 'complexity:standard' -> 'standard'."""
+    for label in issue.get("labels", []):
+        if label.startswith(f"{prefix}:"):
+            return label.split(":")[1]
+    return default
+
+def get_next_ready_task():
+    """Get the next task ready for execution (no blockers)."""
+    result = subprocess.run(
+        ["bd", "ready", "--json"],
+        capture_output=True, text=True
+    )
+    ready_tasks = json.loads(result.stdout) if result.stdout else []
+
+    # Filter out epics
+    ready_tasks = [t for t in ready_tasks if t.get("issue_type") != "epic"]
+
+    if ready_tasks:
+        # Sort by priority (lower = higher priority)
+        ready_tasks.sort(key=lambda t: t.get("priority", 2))
+        return ready_tasks[0]
+    return None
 ```
 
-**CRITICAL**: If no task graph exists, STOP and inform user:
+**CRITICAL**: If no beads tasks exist, STOP and inform user:
 ```
-❌ No task graph found.
+❌ No tasks found in beads.
 
-For spec-kit format:
-  Run /project:scrum to generate .specify/specs/{feature}/tasks.md
-
-For legacy format:
-  Run /session:plan to generate task_graph.json
+Run /project:scrum to generate beads issues from your spec.
 ```
 
-## Step 6B: Parse and Validate Task Graph
+## Step 6C: Fallback to Legacy Task Graph (Deprecated)
+
+For backward compatibility with projects not yet migrated to beads:
 
 ```python
-def load_task_graph(path):
-    """Load and validate task graph JSON."""
+def load_task_graph_legacy(path):
+    """Load task graph from JSON file - DEPRECATED, use beads instead."""
+    print("⚠️ Using legacy task_graph.json format.")
+    print("   Consider running migration: scripts/migrate_to_beads.sh")
+
     with open(path) as f:
         graph = json.load(f)
 
-    # Validate schema version
-    if graph.get("version") != "1.0.0":
-        raise ValueError(f"Unsupported task graph version: {graph.get('version')}")
-
-    # Validate no cycles (should already be validated, but double-check)
+    # Validate no cycles
     validate_dag(graph["tasks"])
 
     # Build execution order
@@ -201,7 +212,7 @@ checkpoint = {
     "completed_tasks": ["T-001", "T-002", "T-003"],
     "failed_tasks": [],
     "skipped_tasks": [],
-    "gitlab_issues": {"T-001": 42, "T-002": 43, "T-003": 44}
+    "beads_issues": {"T-001": 42, "T-002": 43, "T-003": 44}
 }
 ```
 
@@ -209,24 +220,36 @@ checkpoint = {
 
 Show the user what will be executed:
 
+```bash
+# Get task summary from beads
+TOTAL=$(bd list --json | jq '[.[] | select(.issue_type != "epic")] | length')
+OPEN=$(bd list --json | jq '[.[] | select(.status == "open" and .issue_type != "epic")] | length')
+READY=$(bd ready --json | jq '[.[] | select(.issue_type != "epic")] | length')
+
+echo "## Execution Plan"
+echo ""
+echo "**Task Source**: Beads (.beads/)"
+echo "**Tasks**: $TOTAL total, $OPEN remaining, $READY ready to start"
+echo ""
+echo "### Ready Tasks (no blockers)"
+bd ready --json | jq -r '.[] | select(.issue_type != "epic") | "- [\(.priority)] \(.id): \(.title)"'
+```
+
 ```markdown
 ## Execution Plan - Sprint {N}
 
-**Task Graph**: sprints/sprint_05/task_graph.json
-**Tasks**: {TOTAL} total, {REMAINING} remaining
-**Resume**: {Yes (from T-004) | No (fresh start)}
-**Critical Path**: {PATH_LENGTH}h estimated
+**Task Source**: Beads (.beads/)
+**Tasks**: {TOTAL} total, {OPEN} remaining, {READY} ready
+**Resume**: {Yes (from checkpoint) | No (fresh start)}
 
-### Execution Order
+### Ready Tasks (will execute first)
 
-| # | Task ID | Title | Domain | Est. Tokens | Critical |
-|---|---------|-------|--------|-------------|----------|
-| 1 | T-001 | Create user model | backend | 25K | ✓ |
-| 2 | T-002 | Add API endpoint | backend | 30K | ✓ |
-| 3 | T-003 | Write unit tests | tests | 20K | |
-| 4 | T-004 | Frontend component | frontend | 35K | |
+| # | Task ID | Title | Domain | Est. Min | Priority |
+|---|---------|-------|--------|----------|----------|
+| 1 | bd-xxx | Role Flags Schema | backend | 60 | P2 |
+| 2 | bd-yyy | Migration Script | backend | 120 | P2 |
 
-**Note**: Tasks will execute in dependency order. Each task follows TDD workflow.
+**Note**: Tasks execute in dependency order. `bd ready` auto-computes unblocked tasks.
 ```
 
 If `--dry-run` is set, STOP here after displaying the plan.
@@ -238,53 +261,78 @@ If `--dry-run` is set, STOP here after displaying the plan.
 ## Step 7A: Initialize Execution State
 
 ```python
-def init_execution_state(graph, execution_order, checkpoint=None):
-    """Initialize or restore execution state."""
+def init_execution_state(checkpoint=None):
+    """Initialize or restore execution state.
+
+    Note: Task state is now tracked in beads, not locally.
+    Checkpoint is only for session recovery.
+    """
     if checkpoint:
-        start_index = checkpoint["current_index"]
-        completed = set(checkpoint["completed_tasks"])
-        failed = set(checkpoint["failed_tasks"])
-        skipped = set(checkpoint["skipped_tasks"])
-        gitlab_issues = checkpoint.get("gitlab_issues", {})
+        completed = set(checkpoint.get("completed_tasks", []))
+        failed = set(checkpoint.get("failed_tasks", []))
+        skipped = set(checkpoint.get("skipped_tasks", []))
     else:
-        start_index = 0
         completed = set()
         failed = set()
         skipped = set()
-        gitlab_issues = {}
 
     return {
-        "start_index": start_index,
         "completed": completed,
         "failed": failed,
         "skipped": skipped,
-        "gitlab_issues": gitlab_issues,
         "current_task": None,
         "started_at": datetime.utcnow().isoformat()
     }
+
+def get_execution_order_from_beads():
+    """Get tasks in execution order from beads.
+
+    Uses `bd ready` to get unblocked tasks, which handles
+    dependency resolution automatically.
+    """
+    result = subprocess.run(
+        ["bd", "ready", "--json"],
+        capture_output=True, text=True
+    )
+    ready_tasks = json.loads(result.stdout) if result.stdout else []
+
+    # Filter out epics, sort by priority
+    tasks = [t for t in ready_tasks if t.get("issue_type") != "epic"]
+    tasks.sort(key=lambda t: t.get("priority", 2))
+
+    return tasks
 ```
 
 ## Step 7B: Task Execution Loop
 
-For each task in execution order:
+Execute tasks using beads for task selection:
 
 ```python
-for index, task_id in enumerate(execution_order[state["start_index"]:], start=state["start_index"]):
-    task = graph["tasks"][task_id]
+task_count = 0
+total_tasks = get_total_open_tasks()
+
+while True:
+    # Get next ready task from beads
+    task = get_next_ready_task()
+
+    if not task:
+        print("No more ready tasks.")
+        break
+
+    task_id = task["id"]
+    task_count += 1
     state["current_task"] = task_id
 
     # 1. Display task header
     print(f"\n{'='*60}")
-    print(f"TASK {index+1}/{len(execution_order)}: {task_id}")
+    print(f"TASK {task_count}/{total_tasks}: {task_id}")
     print(f"Title: {task['title']}")
-    print(f"Domain: {task['domain']} | Complexity: {task['complexity']}")
-    print(f"Estimated: {task['estimated_tokens']/1000:.0f}K tokens, {task['estimated_hours']}h")
+    print(f"Priority: P{task.get('priority', 2)}")
+    print(f"Estimated: {task.get('estimate', 60)} minutes")
     print(f"{'='*60}\n")
 
-    # 2. Create/update GitLab issue (if not --skip-gitlab)
-    if not skip_gitlab:
-        issue_iid = create_or_update_gitlab_issue(task, "in-progress")
-        state["gitlab_issues"][task_id] = issue_iid
+    # 2. Claim task in beads (mark as in_progress)
+    update_beads_issue(task_id, "in-progress")
 
     # 3. Execute task using TDD workflow
     result = execute_task_tdd(task)
@@ -292,8 +340,7 @@ for index, task_id in enumerate(execution_order[state["start_index"]:], start=st
     # 4. Handle result
     if result["status"] == "success":
         state["completed"].add(task_id)
-        if not skip_gitlab:
-            update_gitlab_issue(task_id, "done")
+        update_beads_issue(task_id, "done")  # Closes task, unblocks dependents
         print(f"✅ Task {task_id} completed successfully")
 
     elif result["status"] == "failed":
@@ -304,14 +351,22 @@ for index, task_id in enumerate(execution_order[state["start_index"]:], start=st
             continue
         elif action == "skip":
             state["skipped"].add(task_id)
-            if not skip_gitlab:
-                update_gitlab_issue(task_id, "skipped")
+            update_beads_issue(task_id, "skipped")
         elif action == "abort":
-            save_checkpoint(state, index)
+            save_checkpoint(state)
             raise ExecutionAborted(f"Aborted at task {task_id}")
 
     # 5. Save checkpoint after each task
-    save_checkpoint(state, index + 1)
+    save_checkpoint(state)
+
+def get_total_open_tasks():
+    """Get count of open tasks from beads."""
+    result = subprocess.run(
+        ["bd", "list", "--json"],
+        capture_output=True, text=True
+    )
+    issues = json.loads(result.stdout) if result.stdout else []
+    return len([i for i in issues if i["status"] == "open" and i.get("issue_type") != "epic"])
 ```
 
 ## Step 7C: TDD Task Execution Workflow
@@ -376,73 +431,62 @@ def execute_task_tdd(task):
     return {"status": "success", "coverage": final_result.get("coverage", 0)}
 ```
 
-## Step 7D: GitLab Issue Management
+## Step 7D: Beads Issue Management
 
 ```python
-def create_or_update_gitlab_issue(task, status):
-    """Create GitLab issue for task or update existing."""
-    project_id = get_project_id()
-    sprint_id = task.get("sprint_id", "XX")
+import subprocess
+import json
 
-    # Check if issue already exists
-    existing = find_issue_by_title(
-        project_id,
-        f"[Sprint {sprint_id}] {task['id']}: {task['title']}"
+def update_beads_issue(task_id, status):
+    """Update beads issue status for task.
+
+    Beads issues should already exist (created by /project:scrum).
+    This function updates status during execution.
+    """
+
+    if status == "in-progress":
+        # Claim the task
+        subprocess.run([
+            "bd", "update", task_id,
+            "--status", "in_progress"
+        ])
+    elif status == "done":
+        # Close the task
+        subprocess.run([
+            "bd", "close", task_id,
+            "--reason", "Task completed via /session:implement"
+        ])
+        # Sync to git
+        subprocess.run(["bd", "sync"])
+    elif status == "skipped":
+        # Mark as skipped
+        subprocess.run([
+            "bd", "update", task_id,
+            "--notes", "Skipped by user during sequential execution"
+        ])
+    elif status == "failed":
+        # Mark as failed
+        subprocess.run([
+            "bd", "update", task_id,
+            "--status", "failed"
+        ])
+
+def get_next_ready_task():
+    """Get the next task ready for execution from beads."""
+    result = subprocess.run(
+        ["bd", "ready", "--json"],
+        capture_output=True, text=True
     )
+    ready_tasks = json.loads(result.stdout) if result.stdout else []
 
-    if existing:
-        # Update existing issue
-        update_issue(
-            project_id,
-            existing["iid"],
-            labels=get_labels_for_status(status)
-        )
-        return existing["iid"]
-
-    # Create new issue
-    issue = create_issue(
-        project_id=project_id,
-        title=f"[Sprint {sprint_id}] {task['id']}: {task['title']}",
-        description=format_issue_description(task),
-        labels=[
-            f"sprint-{sprint_id}",
-            task["domain"],
-            status,
-            "sequential-execution"
-        ]
-    )
-    return issue["iid"]
-
-def format_issue_description(task):
-    """Format GitLab issue description from task."""
-    return f"""
-## Task Context
-{task['description']}
-
-## Acceptance Criteria
-{chr(10).join(f"- [ ] {ac}" for ac in task['acceptance_criteria'])}
-
-## Technical Details
-- **Domain**: {task['domain']}
-- **Complexity**: {task['complexity']}
-- **Estimated Tokens**: {task['estimated_tokens']:,}
-- **Estimated Hours**: {task['estimated_hours']}
-- **Critical Path**: {'Yes' if task.get('on_critical_path') else 'No'}
-
-## Dependencies
-{chr(10).join(f"- {dep}" for dep in task['dependencies']) or 'None'}
-
-## Files Affected
-{chr(10).join(f"- `{f['path']}` ({f['operation']})" for f in task['files_affected'])}
-
-## References
-- SRS: {task.get('srs_ref', 'N/A')}
-- UI: {task.get('ui_ref', 'N/A')}
-
----
-*Executed via `/session:implement` (sequential execution)*
-"""
+    if ready_tasks:
+        # Return highest priority task
+        ready_tasks.sort(key=lambda t: t.get("priority", 2))
+        return ready_tasks[0]["id"]
+    return None
 ```
+
+**Note**: Beads issues should be created by `/project:scrum` before running `/session:implement`. Beads handles dependency unblocking automatically when tasks are closed.
 
 ## Step 7E: Failure Handling
 
@@ -492,7 +536,7 @@ def save_checkpoint(state, next_index):
         "completed_tasks": list(state["completed"]),
         "failed_tasks": list(state["failed"]),
         "skipped_tasks": list(state["skipped"]),
-        "gitlab_issues": state["gitlab_issues"]
+        "beads_issues": state["beads_issues"]
     }
 
     checkpoint_path = f"sprints/sprint_{state['sprint_id']}/execution_checkpoint.json"
@@ -557,10 +601,10 @@ mypy src/
 - **Lint Errors**: {LINT_ERRORS}
 - **Type Errors**: {TYPE_ERRORS}
 
-### GitLab Issues
-- Created: {CREATED_COUNT}
-- Closed: {CLOSED_COUNT}
-- Issues: {ISSUE_LIST with links}
+### Beads Issues
+- Completed: {COMPLETED_COUNT}
+- Remaining: {REMAINING_COUNT}
+- Run `bd list` for full status
 
 ### Next Steps
 {

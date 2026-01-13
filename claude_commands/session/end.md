@@ -993,6 +993,46 @@ else:
 
     print(f"\n📋 Loading Sprint Plan (Legacy): Sprint {sprint_id}")
     print("   ⚠️ Consider migrating to spec-kit format with /project:migrate")
+
+# Check beads for task completion status
+if os.path.exists('.beads'):
+    print("\n📊 Verifying Beads Task Status...")
+
+    import subprocess
+    import json
+
+    # Get all issues from beads
+    result = subprocess.run(
+        ['bd', 'list', '--json'],
+        capture_output=True, text=True
+    )
+    beads_issues = json.loads(result.stdout) if result.stdout else []
+
+    open_issues = [i for i in beads_issues if i['status'] == 'open']
+    closed_issues = [i for i in beads_issues if i['status'] == 'closed']
+
+    if open_issues:
+        print(f"   ⚠️ {len(open_issues)} tasks still open in beads:")
+        for issue in open_issues[:5]:  # Show first 5
+            print(f"      - {issue['id']}: {issue['title']}")
+        if len(open_issues) > 5:
+            print(f"      ... and {len(open_issues) - 5} more")
+        print("\n   Run 'bd ready' to see tasks ready to work on")
+    else:
+        print(f"   ✅ All {len(closed_issues)} tasks closed in beads")
+
+    # Run bd doctor to check for issues
+    doctor_result = subprocess.run(
+        ['bd', 'doctor'],
+        capture_output=True, text=True
+    )
+    if 'warning' in doctor_result.stdout.lower() or 'error' in doctor_result.stdout.lower():
+        print("   ⚠️ Beads doctor found issues - run 'bd doctor' for details")
+    else:
+        print("   ✅ Beads health check passed")
+
+    # Sync before closeout
+    subprocess.run(['bd', 'sync'])
     print("="*80)
 ```
 

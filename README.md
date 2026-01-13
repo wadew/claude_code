@@ -19,13 +19,19 @@ gh_claude_code/
 │   ├── gitlab-cicd-expert.md
 │   ├── test-orchastrator.md
 │   ├── sprint-worker.md        # Sprint task executor
-│   └── tdd-modular-architect.md # TDD workflow expert
+│   ├── tdd-modular-architect.md # TDD workflow expert
+│   ├── ideation-market-researcher.md    # /project:ideate sub-agent
+│   ├── ideation-competitive-analyst.md  # /project:ideate sub-agent
+│   ├── ideation-validation-designer.md  # /project:ideate sub-agent
+│   ├── ideation-persona-builder.md      # /project:ideate sub-agent
+│   └── ideation-unit-economics.md       # /project:ideate sub-agent
 ├── claude_commands/            # SDLC workflow commands
 │   ├── project/                # Specification commands
+│   │   ├── ideate.md           # Idea exploration & validation
 │   │   ├── constitution.md     # Project principles
 │   │   ├── prd.md              # Product requirements
 │   │   ├── srs.md              # Technical design
-│   │   ├── scrum.md            # Task breakdown
+│   │   ├── scrum.md            # Task breakdown (beads integration)
 │   │   ├── validate.md         # Spec validation
 │   │   ├── ux.md               # UX specification
 │   │   ├── ui.md               # UI implementation plan
@@ -34,14 +40,17 @@ gh_claude_code/
 │   │   ├── migrate.md          # Format migration
 │   │   └── prd_signoff.md      # PRD sign-off
 │   └── session/                # Sprint execution commands
-│       ├── init.md             # Project initialization
+│       ├── init.md             # Project initialization (beads setup)
 │       ├── plan.md             # Task graph creation
-│       ├── implement.md        # Sequential execution
-│       ├── parallel.md         # Parallel execution
+│       ├── implement.md        # Sequential execution (beads tracking)
+│       ├── parallel.md         # Parallel execution (beads coordination)
 │       └── end.md              # Sprint closeout
 ├── claude_skills/              # Skill documents and frameworks
 │   ├── threat-modeling-expert.md
 │   └── project-initialization-skill.md
+├── scripts/                    # Utility scripts
+│   └── migrate_to_beads.sh     # Migrate task_graph.json to beads
+├── init_claude.sh              # Initialize .claude/ with symlinks
 ├── LICENSE
 └── README.md
 ```
@@ -103,7 +112,7 @@ TDD expert guiding comprehensive test coverage through incremental development:
 Specialized agent for executing individual sprint tasks with strict TDD workflow:
 - Red-Green-Refactor cycle execution
 - Context management and task isolation
-- GitLab issue integration
+- **Beads issue tracking** (collision-free multi-agent coordination)
 - Quality gates (80% coverage, 100% pass rate)
 - Checkpoint creation for context recovery
 
@@ -120,6 +129,21 @@ Expert in Test-Driven Development for modular architectures and component-based 
 - Component isolation and integration testing strategies
 
 **Use Cases**: TDD implementation, modular architecture design, test strategy planning, component-based system development
+
+### Ideation Agents (5 sub-agents)
+**Location**: `claude_agents/ideation-*.md`
+
+Specialized sub-agents for the `/project:ideate` command that provide expert analysis during idea exploration:
+
+| Agent | Expertise |
+|-------|-----------|
+| `ideation-market-researcher` | Market size (TAM/SAM/SOM), growth trends, market dynamics |
+| `ideation-competitive-analyst` | Competitor analysis, differentiation strategies, market positioning |
+| `ideation-validation-designer` | Validation experiments, MVPs, success metrics |
+| `ideation-persona-builder` | User personas, jobs-to-be-done, user research |
+| `ideation-unit-economics` | Revenue models, CAC/LTV, pricing strategies, profitability |
+
+**Use Cases**: Idea validation, market research, competitive analysis, business model exploration
 
 ## SDLC Workflow Commands
 
@@ -149,6 +173,11 @@ All specifications are stored in a `.specify/` directory:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
+│                       IDEATION PHASE (Optional)                      │
+│                        /project:ideate                               │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
 │                      SPECIFICATION PHASE                             │
 │  /project:constitution → /project:prd → /project:srs → /project:scrum │
 └─────────────────────────────────────────────────────────────────────┘
@@ -170,10 +199,11 @@ Commands for creating long-lived specification artifacts.
 
 | Command | Description | Output |
 |---------|-------------|--------|
+| `/project:ideate` | Interactive idea exploration with expert sub-agents | `.specify/memory/ideation-session.md` |
 | `/project:constitution` | Establish project principles, code standards, and forbidden patterns | `.specify/memory/constitution.md` |
 | `/project:prd` | Create Product Requirements Document following spec-kit methodology | `.specify/specs/{feature}/spec.md` |
 | `/project:srs` | Generate Implementation Plan and Technical Design Specification | `plan.md`, `data-model.md`, `contracts/` |
-| `/project:scrum` | Generate sprint-ready task breakdown from implementation plan | `.specify/specs/{feature}/tasks.md` |
+| `/project:scrum` | Generate sprint-ready task breakdown with beads issue tracking | `.beads/issues.jsonl`, `tasks.md` |
 | `/project:validate` | Validate specifications against project constitution | Validation report |
 | `/project:ux` | Create UX specification and research document | UX research document |
 | `/project:ui` | Create UI implementation plan from UXCanvas designs | `ui-implementation-*.md` |
@@ -188,23 +218,25 @@ Commands for sprint execution and session management.
 
 | Command | Description | Key Features |
 |---------|-------------|--------------|
-| `/session:init` | Initialize project for AI-assisted development | Directory structure, CLAUDE.md, git setup, module registry |
-| `/session:plan` | Create sprint task graph with dependencies | DAG generation, critical path analysis, prerequisite validation |
-| `/session:implement` | Sequential task execution with TDD workflow | Red-Green-Refactor, checkpoint/resume, `--start-from TASK-ID` |
-| `/session:parallel` | Parallel execution with git worktrees | 3-5 concurrent workers, task queue, context exhaustion detection |
-| `/session:end` | Sprint closeout with validation gates | 80% coverage gate, test quality validation, documentation |
+| `/session:init` | Initialize project for AI-assisted development | Directory structure, CLAUDE.md, git setup, **beads init** |
+| `/session:plan` | Create sprint task graph with dependencies | DAG generation, critical path analysis, beads issue creation |
+| `/session:implement` | Sequential task execution with TDD workflow | Red-Green-Refactor, **beads tracking**, `--start-from TASK-ID` |
+| `/session:parallel` | Parallel execution with git worktrees | 3-5 concurrent workers, **beads coordination**, `BEADS_NO_DAEMON=1` |
+| `/session:end` | Sprint closeout with validation gates | 80% coverage gate, `bd doctor`, `bd sync` |
 
 #### Session Command Arguments
 
 **`/session:implement`**:
 ```
-/session:implement [sprint-number] [--resume] [--dry-run] [--skip-gitlab] [--start-from TASK-ID]
+/session:implement [sprint-number] [--resume] [--dry-run] [--start-from TASK-ID]
 ```
 
 **`/session:parallel`**:
 ```
 /session:parallel [sprint-number] [--dry-run] [--max-workers N] [--resume] [--cleanup]
 ```
+
+> **Note**: Task tracking uses [beads](https://github.com/steveyegge/beads) - a distributed, git-backed issue tracker designed for AI agents. Hash-based IDs prevent merge conflicts in parallel execution.
 
 ## Available Skills
 
@@ -227,7 +259,50 @@ A comprehensive framework for initializing software projects with Claude Code, i
 
 **Use Cases**: Starting new projects, establishing development workflows, implementing best practices
 
+## Beads Integration
+
+This workflow uses [beads](https://github.com/steveyegge/beads) for task tracking instead of traditional issue trackers. Beads provides:
+
+- **Collision-free IDs**: Hash-based IDs (e.g., `bd-a1b2`) prevent conflicts in multi-agent scenarios
+- **Auto-computed ready tasks**: `bd ready` identifies unblocked tasks automatically
+- **Git-backed storage**: All task state stored in `.beads/issues.jsonl`, version-controlled
+- **Worktree compatibility**: Use `BEADS_NO_DAEMON=1` for git worktree isolation
+
+### Key Beads Commands
+
+```bash
+bd init                    # Initialize beads in project
+bd ready --json            # Get tasks with no blockers
+bd create "Task title"     # Create new task
+bd update bd-xxxx --status in_progress  # Claim task
+bd close bd-xxxx           # Mark task complete
+bd sync                    # Force sync to git
+bd doctor                  # Health check for orphan detection
+```
+
+### Migration from task_graph.json
+
+If you have existing `task_graph.json` files, use the migration script:
+
+```bash
+./scripts/migrate_to_beads.sh [path/to/task_graph.json]
+```
+
 ## Usage
+
+### Quick Setup with init_claude.sh
+
+The fastest way to set up a project is using the initialization script:
+
+```bash
+# From gh_claude_code directory
+./init_claude.sh ~/Code/my-project
+```
+
+This creates `.claude/` with symlinks to:
+- All project and session commands
+- Core agents (sprint-worker, tdd-modular-architect, ideation-*)
+- Migration scripts
 
 ### Using Agents
 
@@ -250,7 +325,10 @@ A comprehensive framework for initializing software projects with Claude Code, i
 
 2. **Typical Workflow**:
    ```bash
-   # 1. Initialize a new project
+   # 0. (Optional) Explore and validate idea
+   /project:ideate
+
+   # 1. Initialize a new project (sets up beads)
    /session:init
 
    # 2. Create project constitution (first time only)
@@ -262,7 +340,7 @@ A comprehensive framework for initializing software projects with Claude Code, i
    # 4. Generate implementation plan
    /project:srs
 
-   # 5. Create sprint tasks
+   # 5. Create sprint tasks (creates beads issues)
    /project:scrum
 
    # 6. Plan the sprint
@@ -270,7 +348,7 @@ A comprehensive framework for initializing software projects with Claude Code, i
 
    # 7. Execute tasks (choose one)
    /session:implement              # Sequential execution
-   /session:parallel --max-workers 3  # Parallel execution
+   /session:parallel --max-workers 3  # Parallel execution (uses beads coordination)
 
    # 8. Close out the sprint
    /session:end

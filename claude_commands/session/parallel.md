@@ -15,11 +15,12 @@ You **MUST** spawn workers using the **Bash tool** with `claude -p`:
 
 ```bash
 # Spawn headless worker - MUST use Bash tool, NOT Task tool
-claude -p --model {model} --max-turns {max_turns} \
+# CRITICAL: BEADS_NO_DAEMON=1 prevents beads from committing to wrong branch in worktree
+BEADS_NO_DAEMON=1 claude -p --model {model} --max-turns {max_turns} \
     --add-dir "{worktree_path}" \
     --agent sprint-worker \
     --permission-mode acceptEdits \
-    --allowedTools "Read" "Write" "Edit" "Bash" "Grep" "Glob" "mcp__gitlab-mcp__update_issue" \
+    --allowedTools "Read" "Write" "Edit" "Bash" "Grep" "Glob" \
     --output-format json \
     "{task_prompt}" \
     > "{output_file}" 2>&1 &
@@ -105,15 +106,114 @@ You are the **Orchestrator** for parallel sprint execution. Your role is to mana
 
 ---
 
-# PHASE 1: LOAD TASK GRAPH
+# PHASE 1: LOAD TASK GRAPH FROM BEADS
 
-## Step 1A: Locate Task Graph
+## Step 1A: Verify Beads Initialized
 
-### Spec-Kit Format (Preferred)
+Beads is the source of truth for task tracking. Verify it's initialized:
+
+```bash
+# Check beads is initialized
+if [ ! -d ".beads" ]; then
+    echo "❌ Beads not initialized. Run /project:scrum first to create tasks."
+    exit 1
+fi
+
+# Verify ready tasks exist
+READY_COUNT=$(bd ready --json | jq 'length')
+if [ "$READY_COUNT" -eq 0 ]; then
+    echo "⚠️ No ready tasks. Check if all tasks are blocked or completed."
+fi
+```
+
+## Step 1B: Load Tasks from Beads
 
 ```python
-def locate_task_graph(feature_name=None, sprint_number=None):
-    """Find the task graph file, preferring spec-kit format."""
+import subprocess
+import json
+
+def load_tasks_from_beads():
+    """Load all tasks and dependencies from beads."""
+
+    # Get all open issues from beads
+    result = subprocess.run(
+        ["bd", "list", "--json"],
+        capture_output=True, text=True
+    )
+    all_issues = json.loads(result.stdout)
+
+    # Build task graph from beads issues
+    graph = {
+        "sprint_id": get_current_sprint_id(),
+        "tasks": {},
+        "parallel_groups": [],
+        "critical_path": {"tasks": []}
+    }
+
+    for issue in all_issues:
+        if issue["status"] == "closed":
+            continue
+
+        task_id = issue["id"]
+        graph["tasks"][task_id] = {
+            "id": task_id,
+            "title": issue["title"],
+            "description": issue.get("description", ""),
+            "status": issue["status"],
+            "priority": issue.get("priority", 2),
+            "complexity": get_complexity_from_labels(issue),
+            "domain": get_domain_from_labels(issue),
+            "dependencies": [],  # Will be populated from deps
+            "dependents": [],
+            "acceptance_criteria": parse_acceptance_criteria(issue),
+            "external_ref": issue.get("external_ref", ""),
+            "estimated_minutes": issue.get("estimated_minutes", 60)
+        }
+
+    # Load dependencies
+    for task_id in graph["tasks"]:
+        deps_result = subprocess.run(
+            ["bd", "dep", "list", task_id, "--json"],
+            capture_output=True, text=True
+        )
+        deps = json.loads(deps_result.stdout) if deps_result.stdout else []
+
+        for dep in deps:
+            if dep["type"] == "blocks":
+                # This task depends on dep["target"]
+                graph["tasks"][task_id]["dependencies"].append(dep["target"])
+                # Mark dependent
+                if dep["target"] in graph["tasks"]:
+                    graph["tasks"][dep["target"]]["dependents"].append(task_id)
+
+    return graph
+
+def get_complexity_from_labels(issue):
+    """Extract complexity from beads labels."""
+    labels = issue.get("labels", [])
+    for label in labels:
+        if label.startswith("complexity:"):
+            return label.split(":")[1]
+    return "standard"
+
+def get_domain_from_labels(issue):
+    """Extract domain from beads labels."""
+    labels = issue.get("labels", [])
+    for label in labels:
+        if label.startswith("domain:"):
+            return label.split(":")[1]
+    return "backend"
+```
+
+## Step 1C: Fallback to Legacy Task Graph (Deprecated)
+
+For backward compatibility, also support legacy task_graph.json:
+
+```python
+def locate_task_graph_legacy(feature_name=None, sprint_number=None):
+    """Find the task graph file - DEPRECATED, use beads instead."""
+
+    print("⚠️ Using legacy task graph format. Consider migrating to beads.")
 
     # First, check for spec-kit tasks.md files
     spec_kit_paths = glob.glob(".specify/specs/*/tasks.md")
@@ -145,13 +245,13 @@ def locate_task_graph(feature_name=None, sprint_number=None):
     for path in [p for p in legacy_paths if p]:
         if os.path.exists(path):
             print(f"ℹ️ Using legacy task graph format: {path}")
-            print("   Consider running /project:scrum to generate tasks.md")
+            print("   Consider running /project:scrum to generate beads issues")
             return ("legacy", path)
 
     raise FileNotFoundError(
         "Task graph not found.\n"
-        "  - For spec-kit: Run /project:scrum to generate .specify/specs/{feature}/tasks.md\n"
-        "  - For legacy: Run /session:plan to generate task_graph.json"
+        "  - PREFERRED: Run /project:scrum to generate beads issues\n"
+        "  - Legacy: Run /session:plan to generate task_graph.json"
     )
 ```
 
@@ -220,7 +320,7 @@ def init_execution_state(graph, max_workers=3, resume_state=None, project_dir=No
             "failed_tasks": [],
             "pending_tasks": [],
             "blocked_tasks": [],
-            "gitlab_issues": {},
+            "beads_issues": {},  # Maps task_id to beads issue id
             "metrics": {
                 "tasks_total": len(tasks),
                 "tasks_completed": 0,
@@ -271,110 +371,103 @@ def cleanup_stale_worktrees(worktree_base, project_dir):
 
 ---
 
-# PHASE 2: CREATE GITLAB ISSUES (ALL UPFRONT)
+# PHASE 2: VERIFY BEADS ISSUES EXIST
 
-Create GitLab issues for ALL tasks before execution begins:
+**Note**: Beads issues should already be created by `/project:scrum`. This phase verifies they exist and are ready for execution.
 
 ```python
-def create_all_gitlab_issues(graph, state, project_id):
-    """Create GitLab issues for all tasks upfront."""
-    print(f"📋 Creating GitLab issues for {len(graph['tasks'])} tasks...")
+def verify_beads_issues(graph, state):
+    """Verify beads issues exist for all tasks."""
+    print(f"📋 Verifying beads issues for {len(graph['tasks'])} tasks...")
 
-    for task_id, task in graph["tasks"].items():
-        if task_id in state["gitlab_issues"]:
-            continue  # Already created (resume scenario)
-
-        issue = create_issue(
-            project_id=project_id,
-            title=f"[Sprint {graph['sprint_id']}] {task_id}: {task['title']}",
-            description=format_task_issue(task, graph),
-            labels=[
-                f"sprint-{graph['sprint_id']}",
-                task["domain"],
-                "pending",
-                "parallel-execution"
-            ]
+    for task_id in graph["tasks"]:
+        # Check issue exists in beads
+        result = subprocess.run(
+            ["bd", "show", task_id, "--json"],
+            capture_output=True, text=True
         )
-        state["gitlab_issues"][task_id] = issue["iid"]
-        print(f"  ✓ Created issue #{issue['iid']} for {task_id}")
+
+        if result.returncode != 0:
+            print(f"  ⚠️ Issue {task_id} not found in beads")
+            print(f"     Run /project:scrum to create missing issues")
+            raise ValueError(f"Missing beads issue: {task_id}")
+
+        issue = json.loads(result.stdout)
+        state["beads_issues"][task_id] = issue["id"]
+        print(f"  ✓ Found issue {task_id}: {issue['title']}")
 
     return state
 
-def format_task_issue(task, graph):
-    """Format GitLab issue description."""
-    critical_path = set(graph.get("critical_path", {}).get("tasks", []))
+def verify_task_readiness(state):
+    """Verify at least some tasks are ready to execute."""
+    result = subprocess.run(
+        ["bd", "ready", "--json"],
+        capture_output=True, text=True
+    )
+    ready_tasks = json.loads(result.stdout) if result.stdout else []
 
-    return f"""
-## Task Context
-{task['description']}
+    if not ready_tasks:
+        print("⚠️ No tasks ready for execution.")
+        print("   All tasks may be blocked by dependencies or already completed.")
+        print("   Check: bd list --json | jq '.[] | select(.status == \"open\")'")
 
-## Acceptance Criteria
-{chr(10).join(f"- [ ] {ac}" for ac in task['acceptance_criteria'])}
-
-## Worker Instructions
-- **Branch**: `feature/sprint-{graph['sprint_id']}-{task['id'].lower()}`
-- **Domain**: {task['domain']}
-- **Complexity**: {task['complexity']}
-- **Estimated Tokens**: {task['estimated_tokens']:,}
-- **Critical Path**: {'⚠️ YES' if task['id'] in critical_path else 'No'}
-
-## Dependencies
-{chr(10).join(f"- {dep}" for dep in task['dependencies']) or 'None - can start immediately'}
-
-## Dependents (blocked by this task)
-{chr(10).join(f"- {dep}" for dep in task.get('dependents', [])) or 'None'}
-
-## Files Affected
-{chr(10).join(f"- `{f['path']}` ({f['operation']})" for f in task['files_affected'])}
-
-## References
-- SRS: {task.get('srs_ref', 'N/A')}
-- UI: {task.get('ui_ref', 'N/A')}
-- Expert Agent: `{task.get('expert_agent', 'general-purpose')}`
-
----
-*Executed via `/session:parallel` (continuous worker model)*
-"""
+    state["initial_ready_count"] = len(ready_tasks)
+    print(f"  ✓ {len(ready_tasks)} tasks ready to start")
+    return state
 ```
+
+**Why beads instead of GitLab?**
+- Hash-based IDs prevent merge conflicts in multi-agent mode
+- `bd ready` automatically computes unblocked tasks
+- Native dependency tracking - no need for custom JSON parsing
+- Git-backed audit trail for all task state changes
+- `BEADS_NO_DAEMON=1` enables worktree compatibility
 
 ---
 
 # PHASE 3: ORCHESTRATOR MAIN LOOP
 
-## Step 3A: Task Selection Algorithm
+## Step 3A: Task Selection Using Beads
+
+**Beads automatically computes ready tasks** - tasks with no blocking dependencies:
 
 ```python
 def select_next_tasks(state, graph, max_to_select):
     """
-    Select next tasks to execute using priority algorithm.
+    Select next tasks using beads' native ready detection.
 
-    Priority order:
-    1. Tasks with all dependencies satisfied (pending, not blocked)
-    2. Among eligible: prefer Critical Path tasks
-    3. Then prefer tasks that unblock the most dependents
-    4. Then by parallel group order
-    5. Tiebreaker: alphabetical by task ID
+    beads `bd ready` already handles:
+    - Dependency resolution (tasks blocked by open dependencies)
+    - Priority ordering (lower priority number = higher priority)
+    - No need for custom topological sort
     """
-    critical_path = set(graph.get("critical_path", {}).get("tasks", []))
-    tasks = graph["tasks"]
 
-    # Get eligible tasks (pending, not in_progress)
+    # Get ready tasks from beads
+    result = subprocess.run(
+        ["bd", "ready", "--json"],
+        capture_output=True, text=True
+    )
+    ready_issues = json.loads(result.stdout) if result.stdout else []
+
+    # Filter out tasks already being worked on
     eligible = []
-    for task_id in state["pending_tasks"]:
+    for issue in ready_issues:
+        task_id = issue["id"]
         if task_id not in state["active_workers"]:
-            task = tasks[task_id]
-            priority = (
-                0 if task_id in critical_path else 1,       # Critical path first
-                -len(task.get("dependents", [])),            # More dependents = higher priority
-                task.get("parallel_group", 999),             # Lower group first
-                task_id                                       # Alphabetical tiebreaker
-            )
-            eligible.append((priority, task_id))
+            eligible.append((issue.get("priority", 2), task_id))
 
-    # Sort by priority and take up to max_to_select
+    # Sort by priority (lower = higher priority)
     eligible.sort()
+
+    # Return up to max_to_select task IDs
     return [task_id for _, task_id in eligible[:max_to_select]]
 ```
+
+**Advantages over custom algorithm:**
+- Beads handles dependency tracking natively
+- No need to maintain blocked_by lists manually
+- Automatic unblocking when dependencies close
+- Hash-based IDs prevent merge conflicts
 
 ## Step 3B: Pre-flight Token Estimation
 
@@ -475,7 +568,7 @@ def spawn_worker(task_id, task, graph, state, project_dir):
         "sprint_id": graph["sprint_id"],
         "branch": branch,
         "worktree_path": worktree_path,
-        "gitlab_issue": state["gitlab_issues"].get(task_id)
+        "beads_id": task_id  # Task ID is the beads issue ID
     })
 
     # Output file for worker results (in main project state/)
@@ -494,17 +587,19 @@ Follow TDD workflow. Read CLAUDE.md first. Output JSON status block at the end."
 
     # Spawn worker IN THE WORKTREE directory (not main project)
     # CRITICAL: Use Bash tool to run this command, NOT Task tool!
+    # CRITICAL: Set BEADS_NO_DAEMON=1 for worktree compatibility!
     cmd = f"""
-    claude -p {model_flag} --max-turns {max_turns} \\
+    BEADS_NO_DAEMON=1 claude -p {model_flag} --max-turns {max_turns} \\
         --add-dir "{worktree_path}" \\
         --agent sprint-worker \\
         --permission-mode acceptEdits \\
-        --allowedTools "Read" "Write" "Edit" "Bash" "Grep" "Glob" "mcp__gitlab-mcp__update_issue" \\
+        --allowedTools "Read" "Write" "Edit" "Bash" "Grep" "Glob" \\
         --output-format json \\
         "{user_prompt}" \\
         > "{output_file}" 2>&1 &
     """
     # Note: The trailing & runs in background so we can spawn multiple workers
+    # Note: BEADS_NO_DAEMON=1 prevents beads from committing to wrong branch in worktree
 
     # Run in background
     process = subprocess.Popen(cmd, shell=True)
@@ -520,12 +615,12 @@ Follow TDD workflow. Read CLAUDE.md first. Output JSON status block at the end."
     if task_id in state["pending_tasks"]:
         state["pending_tasks"].remove(task_id)
 
-    # Update GitLab issue
-    update_issue(
-        project_id=get_project_id(),
-        issue_iid=state["gitlab_issues"][task_id],
-        labels=["in-progress"]
-    )
+    # Update beads issue status (claim the task)
+    subprocess.run([
+        "bd", "update", task_id,
+        "--status", "in_progress",
+        "--assignee", f"worker-{process.pid}"
+    ])
 
     print(f"🚀 Spawned worker for {task_id} (PID: {process.pid}) in worktree: {worktree_path}")
     return process.pid
@@ -624,19 +719,28 @@ def on_worker_complete(task_id, result, state, graph):
     # 3. Update metrics
     state["metrics"]["tasks_completed"] += 1
 
-    # 4. Unblock dependent tasks
-    newly_unblocked = unblock_dependents(task_id, state, graph)
+    # 4. Close beads issue (this automatically unblocks dependents!)
+    subprocess.run([
+        "bd", "close", task_id,
+        "--reason", f"Worker completed: {result.get('summary', 'Task done')}"
+    ])
 
-    # 5. Update GitLab issue
-    update_issue(
-        project_id=get_project_id(),
-        issue_iid=state["gitlab_issues"][task_id],
-        labels=["done"]
+    # 5. Sync beads to git
+    subprocess.run(["bd", "sync"])
+
+    # 6. Get newly unblocked tasks (beads handles this automatically)
+    result = subprocess.run(
+        ["bd", "ready", "--json"],
+        capture_output=True, text=True
     )
-    close_issue(
-        project_id=get_project_id(),
-        issue_iid=state["gitlab_issues"][task_id]
-    )
+    newly_ready = json.loads(result.stdout) if result.stdout else []
+    newly_unblocked = [t["id"] for t in newly_ready if t["id"] not in state["pending_tasks"]]
+
+    # Update state pending list
+    for tid in newly_unblocked:
+        if tid in state["blocked_tasks"]:
+            state["blocked_tasks"].remove(tid)
+        state["pending_tasks"].append(tid)
 
     print(f"✅ {task_id} completed. Unblocked: {newly_unblocked or 'none'}")
     return newly_unblocked
@@ -756,17 +860,12 @@ def on_worker_fail(task_id, error, state, graph):
             state["tasks"][task_id]["subtasks"] = [s["id"] for s in subtasks]
             state["active_workers"].remove(task_id)
 
-            # Update GitLab issue
-            update_issue(
-                project_id=get_project_id(),
-                issue_iid=state["gitlab_issues"][task_id],
-                labels=["split-for-context"]
-            )
-            add_issue_comment(
-                project_id=get_project_id(),
-                issue_iid=state["gitlab_issues"][task_id],
-                body=f"⚠️ Context exhaustion detected. Task split into subtasks: {[s['id'] for s in subtasks]}"
-            )
+            # Update beads issue with split note
+            subprocess.run([
+                "bd", "update", task_id,
+                "--status", "split",
+                "--notes", f"Context exhaustion - split into: {[s['id'] for s in subtasks]}"
+            ])
 
             return []  # No downstream blocking - subtasks will complete the work
 
@@ -798,17 +897,15 @@ def on_worker_fail(task_id, error, state, graph):
     if blocked_by_this:
         print(f"   Tasks blocked by this failure: {blocked_by_this}")
 
-    # 5. Update GitLab issue
-    update_issue(
-        project_id=get_project_id(),
-        issue_iid=state["gitlab_issues"][task_id],
-        labels=["failed", "needs-attention"]
-    )
-    add_issue_comment(
-        project_id=get_project_id(),
-        issue_iid=state["gitlab_issues"][task_id],
-        body=f"❌ Worker failed with error:\n```\n{error}\n```"
-    )
+    # 5. Update beads issue with failure
+    subprocess.run([
+        "bd", "update", task_id,
+        "--status", "failed",
+        "--notes", f"Worker failed: {error[:500]}"
+    ])
+
+    # Sync to git
+    subprocess.run(["bd", "sync"])
 
     print(f"❌ {task_id} failed: {error[:100]}...")
     return blocked_by_this
@@ -1095,8 +1192,8 @@ def generate_report(state, graph):
 - **Tests**: {state['metrics'].get('test_count', 'N/A')} passing
 - **Coverage**: {state['metrics'].get('final_coverage', 'N/A')}%
 
-### GitLab Issues
-{chr(10).join(f"- #{iid}: {tid}" for tid, iid in state['gitlab_issues'].items())}
+### Beads Issues
+{chr(10).join(f"- {tid}: {state['tasks'][tid]['status']}" for tid in state['tasks'].keys())}
 
 ### Failed Tasks (Need Attention)
 """
@@ -1194,10 +1291,10 @@ state/
   "failed_tasks": [],
   "pending_tasks": [],
   "blocked_tasks": ["T-003"],
-  "gitlab_issues": {
-    "T-001": 42,
-    "T-002": 43,
-    "T-003": 44
+  "beads_ids": {
+    "T-001": "bd-a1b2",
+    "T-002": "bd-c3d4",
+    "T-003": "bd-e5f6"
   },
   "metrics": {
     "tasks_total": 3,
@@ -1220,7 +1317,7 @@ state/
 
 When a worker fails:
 1. Log failure with worker output
-2. Update GitLab issue with `failed` label
+2. Update beads issue with `bd update {task_id} --label failed`
 3. Continue with non-blocked tasks
 4. Report all failures at end
 
@@ -1273,11 +1370,11 @@ When `--dry-run` is specified:
 - Pending: {PENDING}
 - Blocked: {BLOCKED}
 
-### GitLab Issues (Would Create)
-| Task | Title | Labels |
-|------|-------|--------|
-| T-001 | Create user model | sprint-05, backend, pending |
-| T-002 | Add API endpoint | sprint-05, backend, pending |
+### Beads Issues (Current State)
+| Task | Title | Status | Priority |
+|------|-------|--------|----------|
+| T-001 | Create user model | pending | 2 |
+| T-002 | Add API endpoint | pending | 2 |
 
 ### Worker Schedule (Would Spawn)
 **Wave 1** (immediate):

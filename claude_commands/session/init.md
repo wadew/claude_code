@@ -71,6 +71,29 @@ ls -la state/
 
 If directories already exist, skip creation and note in output.
 
+### Initialize Beads for Task Tracking
+
+```bash
+# Initialize beads if not already present
+if [ ! -d ".beads" ]; then
+    echo "Initializing beads for task tracking..."
+    bd init
+    bd setup claude  # Install Claude Code hooks
+    echo "✅ Beads initialized"
+else
+    echo "✅ Beads already initialized"
+fi
+
+# Verify beads health
+bd doctor
+```
+
+**Beads Provides:**
+- Hash-based IDs prevent merge conflicts in multi-agent mode
+- `bd ready` auto-computes tasks with no blocking dependencies
+- Git-backed JSONL for audit trail
+- `BEADS_NO_DAEMON=1` enables worktree compatibility for parallel execution
+
 ### Check for Constitution
 
 ```bash
@@ -1954,6 +1977,64 @@ Update THIS FILE with:
 **The Deletion Test**: If you can delete a feature folder and cleanly remove that capability with no orphaned code, your architecture is modular.
 
 ⚠️ **Modularity is ENFORCED at session end (`/session:end`)** - circular dependencies, layer-based structure, and boundary violations will BLOCK closeout.
+
+### Rule 8: Beads Task Management
+**Distributed Task Tracking for Multi-Agent Development**
+
+Beads (bd) provides collision-free task coordination for multi-agent sessions. All task tracking uses beads instead of GitLab issues.
+
+**Key Commands:**
+```bash
+# View tasks ready for work (no blockers)
+bd ready --json
+
+# Create task from user story
+bd create "US-001: Implement login" --type story --priority 2
+
+# Claim task for worker
+bd update bd-xxxx --status in_progress --assignee "worker-1"
+
+# Complete task
+bd close bd-xxxx --reason "Implementation complete"
+
+# Sync changes to git (required after parallel work)
+bd sync
+```
+
+**Session Workflow Integration:**
+- `/session:init` → Runs `bd init` if `.beads/` doesn't exist
+- `/session:plan` → Creates beads issues from task graph
+- `/session:parallel` → Workers use `bd ready` to claim tasks, `bd sync` on completion
+- `/session:end` → Runs `bd doctor` for orphan detection
+
+**Dependency Types:**
+- `blocks` → Task cannot start until dependency completes
+- `parent-child` → Hierarchical (epic → story → subtask)
+- `related` → Informational link (doesn't block)
+
+**Parallel Worker Protocol:**
+```bash
+# Workers run in worktrees with daemon disabled
+export BEADS_NO_DAEMON=1
+
+# Claim task
+bd update $TASK_ID --status in_progress
+
+# Work...
+
+# Complete and sync
+bd close $TASK_ID --reason "Done"
+bd sync
+```
+
+**Task Hierarchy:**
+- `bd-epic` → Feature/Epic level
+- `bd-epic.1` → User Story level
+- `bd-epic.1.1` → Subtask level
+
+**Traceability:**
+- Link to PRD via: `bd update bd-xxxx --external-ref "FR-001"`
+- All task history tracked in git via `.beads/issues.jsonl`
 
 ---
 
