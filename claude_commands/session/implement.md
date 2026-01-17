@@ -420,6 +420,20 @@ def execute_task_tdd(task):
     if type_result["errors"]:
         fix_type_errors(type_result["errors"])
 
+    # 🔍 Efficiency Check (non-blocking awareness prompt)
+    print("\n" + "-" * 50)
+    print("   🔍 Efficiency Check:")
+    print("   Before marking this task complete, consider:")
+    print("   • Is there a simpler way to achieve this?")
+    print("   • Are there any O(n²) operations that could be O(n)?")
+    print("   • Is there unnecessary complexity or over-engineering?")
+    print("   • Could any loops be replaced with built-in functions?")
+    print("   • Are there repeated calculations that could be cached?")
+    print("")
+    print("   If yes to any: refactor now while context is fresh.")
+    print("   If no: proceed to final tests.")
+    print("-" * 50)
+
     # Final test run to ensure refactoring didn't break anything
     final_result = run_tests(task["test_pattern"])
     if not final_result["passed"]:
@@ -428,7 +442,191 @@ def execute_task_tdd(task):
             "error": f"Tests failed after refactoring:\n{final_result['output']}"
         }
 
+    # Phase 4: E2E VERIFICATION (for frontend/integration tasks)
+    if is_frontend_or_integration_task(task):
+        print(f"\n🔍 Phase 4/4: E2E Verification for {task['id']}...")
+
+        # 4a. Validate API hosts - no hardcoded URLs
+        api_validation = validate_api_hosts(task)
+        if not api_validation["valid"]:
+            return {
+                "status": "failed",
+                "error": f"API Host Validation Failed:\n" +
+                         "\n".join(f"  - {e}" for e in api_validation["errors"])
+            }
+        print("  ✅ API host validation passed")
+
+        # 4b. Run E2E tests if they exist for this feature
+        e2e_result = run_e2e_tests_for_task(task)
+        if e2e_result["tests_exist"] and not e2e_result["passed"]:
+            return {
+                "status": "failed",
+                "error": f"E2E tests failed:\n{e2e_result['output']}"
+            }
+        elif e2e_result["tests_exist"]:
+            print(f"  ✅ E2E tests passed ({e2e_result['test_count']} tests)")
+        else:
+            print("  ℹ️  No E2E tests found for this task")
+
     return {"status": "success", "coverage": final_result.get("coverage", 0)}
+
+
+def is_frontend_or_integration_task(task):
+    """Check if task requires E2E verification."""
+    frontend_domains = ["frontend", "ui", "e2e", "integration"]
+    frontend_indicators = ["component", "form", "page", "view", "api call"]
+
+    if task.get("domain", "").lower() in frontend_domains:
+        return True
+
+    title_lower = task.get("title", "").lower()
+    return any(ind in title_lower for ind in frontend_indicators)
+
+
+def validate_api_hosts(task):
+    """
+    Validate frontend code doesn't contain hardcoded API URLs.
+
+    Scans for:
+    1. Hardcoded localhost URLs
+    2. Hardcoded staging/production URLs
+    3. Missing API_BASE_URL usage
+    """
+    import re
+    import os
+
+    errors = []
+    warnings = []
+
+    # Patterns that should NOT appear in frontend code
+    forbidden_patterns = [
+        (r'localhost:\d+', "Hardcoded localhost URL"),
+        (r'127\.0\.0\.1', "Hardcoded IP address"),
+        (r'https?://[a-z]+\.staging\.[a-z]+\.[a-z]+', "Hardcoded staging URL"),
+        (r'https?://api\.[a-z]+\.[a-z]+', "Hardcoded production API URL"),
+    ]
+
+    # Files to scan based on task
+    files_to_scan = task.get("files_affected", [])
+
+    # Also scan common API-related directories
+    api_dirs = ["src/api", "src/services", "src/lib", "src/utils/api"]
+
+    for file_info in files_to_scan:
+        filepath = file_info.get("path", file_info) if isinstance(file_info, dict) else file_info
+
+        # Only scan frontend files
+        if not any(filepath.endswith(ext) for ext in ['.ts', '.tsx', '.js', '.jsx', '.vue']):
+            continue
+
+        if not os.path.exists(filepath):
+            continue
+
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read()
+                lines = content.split('\n')
+
+            for line_num, line in enumerate(lines, 1):
+                for pattern, description in forbidden_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        errors.append(
+                            f"{filepath}:{line_num} - {description}: {line.strip()[:80]}"
+                        )
+
+            # Check for proper environment variable usage
+            if '/api/' in content or 'fetch(' in content or 'axios' in content:
+                if 'API_BASE_URL' not in content and 'VITE_API' not in content:
+                    if 'process.env' not in content and 'import.meta.env' not in content:
+                        warnings.append(
+                            f"{filepath} - Makes API calls but may not use environment variables"
+                        )
+
+        except Exception as e:
+            warnings.append(f"Could not scan {filepath}: {e}")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings
+    }
+
+
+def run_e2e_tests_for_task(task):
+    """
+    Run E2E tests associated with this task.
+
+    Looks for E2E tests in:
+    1. Task's test_files with e2e pattern
+    2. Feature's e2e directory
+    """
+    import subprocess
+    import os
+
+    # Determine feature from task
+    feature_name = extract_feature_from_task(task)
+    e2e_dir = f".specify/specs/{feature_name}/e2e" if feature_name else None
+
+    # Check if E2E tests exist
+    if e2e_dir and os.path.isdir(e2e_dir):
+        test_files = []
+        for root, dirs, files in os.walk(e2e_dir):
+            for f in files:
+                if f.endswith('.spec.ts') or f.endswith('.test.ts'):
+                    test_files.append(os.path.join(root, f))
+
+        if not test_files:
+            return {"tests_exist": False}
+
+        # Run Playwright tests
+        try:
+            result = subprocess.run(
+                ["npx", "playwright", "test", e2e_dir, "--reporter=list"],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+
+            return {
+                "tests_exist": True,
+                "passed": result.returncode == 0,
+                "test_count": len(test_files),
+                "output": result.stdout + result.stderr
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "tests_exist": True,
+                "passed": False,
+                "output": "E2E tests timed out after 5 minutes"
+            }
+        except FileNotFoundError:
+            return {
+                "tests_exist": True,
+                "passed": False,
+                "output": "Playwright not installed. Run: npm install -D @playwright/test"
+            }
+
+    return {"tests_exist": False}
+
+
+def extract_feature_from_task(task):
+    """Extract feature name from task metadata."""
+    # Try to get from external_ref or spec reference
+    external_ref = task.get("external_ref", "")
+    if external_ref:
+        # Pattern: FR-001,.specify/specs/{feature}/spec.md
+        match = re.search(r'\.specify/specs/([^/]+)/', external_ref)
+        if match:
+            return match.group(1)
+
+    # Try to infer from task title or files
+    for file_info in task.get("files_affected", []):
+        filepath = file_info.get("path", file_info) if isinstance(file_info, dict) else file_info
+        match = re.search(r'\.specify/specs/([^/]+)/', filepath)
+        if match:
+            return match.group(1)
+
+    return None
 ```
 
 ## Step 7D: Beads Issue Management

@@ -485,6 +485,196 @@ US-301: Dashboard View
 **Total Estimate**: 13 points (consider splitting if >8pts)
 ```
 
+## Step 2D: E2E Test Scenario Extraction
+
+For features with UI components or API integrations, extract E2E test scenarios from acceptance criteria. This ensures comprehensive validation beyond unit/integration tests.
+
+### E2E Scenario Template
+
+For each user story with frontend components, generate E2E scenarios:
+
+```markdown
+## E2E Test Scenarios
+
+### E2E-{US-ID}-{N}: {Scenario Title}
+**User Story**: US-{ID}
+**Acceptance Criteria**: AC-{N} from spec.md
+
+**Preconditions**:
+- [Setup state required]
+
+**Steps**:
+1. [User action 1]
+2. [Expected result 1]
+3. [User action 2]
+4. [Expected result 2]
+
+**API Validation Points**:
+| Step | Expected API Call | Contract Reference |
+|------|-------------------|-------------------|
+| 1 | POST /api/v1/auth/login | rest-api.yaml#login |
+| 3 | GET /api/v1/users/me | rest-api.yaml#current-user |
+
+**Environment Validation**:
+- API_BASE_URL must be set
+- No hardcoded localhost URLs
+- All endpoints match contract spec
+```
+
+### E2E Task Type: T-E2E
+
+Create E2E-specific tasks for stories with frontend components:
+
+```markdown
+### T-E2E-{N}: {E2E Test Title}
+- **Status**: pending
+- **Domain**: e2e
+- **Complexity**: standard
+- **Priority**: P1
+- **Dependencies**: T-{frontend-task}, T-{backend-task}
+- **Estimated Hours**: {1.5-3.0}
+- **Purpose**: Verify frontend-backend integration
+- **Test Files**:
+  - `e2e/{feature}/{scenario}.spec.ts`
+- **Validation Points**:
+  | Component | Expected API Call | Contract Reference |
+  |-----------|-------------------|-------------------|
+  | LoginForm | POST /api/v1/auth/login | rest-api.yaml#login |
+  | Dashboard | GET /api/v1/dashboard | rest-api.yaml#dashboard |
+- **Environment Requirements**:
+  - [ ] API_BASE_URL configured
+  - [ ] No hardcoded API hosts in frontend code
+  - [ ] Test data seeded
+- **References**:
+  - Spec: spec.md#US-{ID}
+  - UAT Plan: uat-plan.md#E2E-{ID}
+```
+
+### API Host Validation Task
+
+For each feature with frontend components, include an API validation task:
+
+```markdown
+### T-API-VAL-{N}: API Host Validation - {Feature}
+- **Status**: pending
+- **Domain**: e2e
+- **Complexity**: simple
+- **Priority**: P0 (blocking)
+- **Dependencies**: All frontend tasks for this feature
+- **Estimated Hours**: 0.5
+- **Purpose**: Verify frontend calls correct API hosts
+- **Validation Checks**:
+  | Check | Pattern | Expected |
+  |-------|---------|----------|
+  | No localhost | `localhost:` | 0 occurrences |
+  | No hardcoded staging | `staging.` | 0 occurrences |
+  | Uses env variable | `API_BASE_URL` or `VITE_API_URL` | Required |
+  | Endpoints match contract | `rest-api.yaml` | All match |
+- **Files to Scan**:
+  - `src/api/*.ts`
+  - `src/services/*.ts`
+  - `src/lib/fetch*.ts`
+- **References**:
+  - Contract: contracts/rest-api.yaml
+```
+
+### E2E Scenario Extraction Algorithm
+
+```python
+def extract_e2e_scenarios(user_stories, spec_md):
+    """Extract E2E test scenarios from user stories with UI components."""
+    e2e_scenarios = []
+    e2e_tasks = []
+
+    for story in user_stories:
+        # Only create E2E for stories with frontend components
+        if not has_frontend_component(story):
+            continue
+
+        # Extract acceptance criteria that involve user interactions
+        for ac in story.acceptance_criteria:
+            if involves_user_interaction(ac):
+                scenario = {
+                    "id": f"E2E-{story.id}-{ac.number}",
+                    "title": f"{story.title} - {ac.summary}",
+                    "user_story": story.id,
+                    "acceptance_criteria": ac.id,
+                    "steps": extract_steps_from_ac(ac),
+                    "api_calls": identify_api_calls(ac, spec_md),
+                    "environment_requirements": ["API_BASE_URL configured"]
+                }
+                e2e_scenarios.append(scenario)
+
+        # Create E2E task for this user story
+        e2e_task = {
+            "id": f"T-E2E-{len(e2e_tasks) + 1:03d}",
+            "title": f"E2E Tests: {story.title}",
+            "domain": "e2e",
+            "complexity": "standard",
+            "priority": "P1",
+            "dependencies": get_frontend_backend_deps(story),
+            "estimated_hours": 2.0,
+            "scenarios": [s["id"] for s in e2e_scenarios if s["user_story"] == story.id]
+        }
+        e2e_tasks.append(e2e_task)
+
+    # Add API validation task if any E2E tasks exist
+    if e2e_tasks:
+        api_val_task = {
+            "id": f"T-API-VAL-001",
+            "title": "API Host Validation",
+            "domain": "e2e",
+            "complexity": "simple",
+            "priority": "P0",
+            "dependencies": [t["id"] for t in e2e_tasks],
+            "estimated_hours": 0.5
+        }
+        e2e_tasks.append(api_val_task)
+
+    return e2e_scenarios, e2e_tasks
+
+def has_frontend_component(story):
+    """Check if story involves frontend work."""
+    frontend_indicators = ["frontend", "ui", "form", "page", "component", "view", "button"]
+    return any(ind in story.domain.lower() or ind in story.title.lower()
+               for ind in frontend_indicators)
+
+def involves_user_interaction(ac):
+    """Check if acceptance criteria involves user interaction."""
+    interaction_patterns = [
+        "user can", "user should", "clicking", "entering",
+        "submitting", "navigating", "displays", "shows"
+    ]
+    return any(pattern in ac.text.lower() for pattern in interaction_patterns)
+```
+
+### Sprint Allocation with E2E Tasks
+
+When allocating to sprints, E2E tasks should:
+1. Come **after** their frontend/backend dependencies
+2. Be grouped at the end of the sprint for the feature
+3. Include the API validation task as a **blocking gate** before sprint completion
+
+```markdown
+## Sprint {N}: {Feature Name}
+
+### Implementation Tasks
+| Task | Domain | Complexity | Hours | Status |
+|------|--------|------------|-------|--------|
+| T-001 | backend | standard | 2.0 | pending |
+| T-002 | backend | standard | 1.5 | pending |
+| T-003 | frontend | standard | 3.0 | pending |
+
+### E2E & Validation Tasks (Run Last)
+| Task | Domain | Complexity | Hours | Status |
+|------|--------|------------|-------|--------|
+| T-E2E-001 | e2e | standard | 2.0 | pending |
+| T-E2E-002 | e2e | standard | 1.5 | pending |
+| T-API-VAL-001 | e2e | simple | 0.5 | pending | **BLOCKING**
+
+**Note**: T-API-VAL-001 must pass before sprint can close.
+```
+
 # PHASE 3: DEPENDENCY ANALYSIS
 
 ## Step 3A: Identify Dependencies

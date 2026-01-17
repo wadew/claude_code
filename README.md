@@ -20,6 +20,7 @@ gh_claude_code/
 │   ├── test-orchastrator.md
 │   ├── sprint-worker.md        # Sprint task executor
 │   ├── tdd-modular-architect.md # TDD workflow expert
+│   ├── e2e-testing-expert.md   # E2E/Playwright/UAT expert
 │   ├── ideation-market-researcher.md    # /project:ideate sub-agent
 │   ├── ideation-competitive-analyst.md  # /project:ideate sub-agent
 │   ├── ideation-validation-designer.md  # /project:ideate sub-agent
@@ -31,7 +32,8 @@ gh_claude_code/
 │   │   ├── constitution.md     # Project principles
 │   │   ├── prd.md              # Product requirements
 │   │   ├── srs.md              # Technical design
-│   │   ├── scrum.md            # Task breakdown (beads integration)
+│   │   ├── scrum.md            # Task breakdown (beads + E2E tasks)
+│   │   ├── uat.md              # UAT plan generation
 │   │   ├── validate.md         # Spec validation
 │   │   ├── ux.md               # UX specification
 │   │   ├── ui.md               # UI implementation plan
@@ -42,9 +44,10 @@ gh_claude_code/
 │   └── session/                # Sprint execution commands
 │       ├── init.md             # Project initialization (beads setup)
 │       ├── plan.md             # Task graph creation
-│       ├── implement.md        # Sequential execution (beads tracking)
+│       ├── implement.md        # Sequential execution (E2E verification)
 │       ├── parallel.md         # Parallel execution (beads coordination)
-│       └── end.md              # Sprint closeout
+│       ├── uat.md              # UAT execution (Playwright/Chrome)
+│       └── end.md              # Sprint closeout (UAT gate)
 ├── claude_skills/              # Skill documents and frameworks
 │   ├── threat-modeling-expert.md
 │   └── project-initialization-skill.md
@@ -130,6 +133,19 @@ Expert in Test-Driven Development for modular architectures and component-based 
 
 **Use Cases**: TDD implementation, modular architecture design, test strategy planning, component-based system development
 
+### E2E Testing Expert
+**Location**: `claude_agents/e2e-testing-expert.md`
+
+Expert in End-to-End testing with Playwright, UAT scenario design, and API validation:
+- Playwright test architecture (Page Object Model, fixtures, configuration)
+- API host validation (detecting hardcoded localhost/staging URLs)
+- UAT scenario design from acceptance criteria
+- Browser automation patterns and flakiness prevention
+- Cross-browser testing strategies
+- CI/CD integration for E2E tests
+
+**Use Cases**: E2E test development, UAT planning, Playwright configuration, API validation setup, frontend-backend integration testing
+
 ### Ideation Agents (5 sub-agents)
 **Location**: `claude_agents/ideation-*.md`
 
@@ -183,13 +199,27 @@ All specifications are stored in a `.specify/` directory:
 └─────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌─────────────────────────────────────────────────────────────────────┐
+│                        UAT PLANNING PHASE                            │
+│                         /project:uat                                 │
+│           (Generate UAT plan + Playwright E2E skeletons)             │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
 │                       EXECUTION PHASE                                │
 │   /session:init → /session:plan → /session:implement OR parallel     │
+│                    (includes E2E verification for frontend tasks)    │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                         UAT EXECUTION PHASE                          │
+│                          /session:uat                                │
+│              (Playwright automated OR Chrome interactive)            │
 └─────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       CLOSEOUT PHASE                                 │
 │                        /session:end                                  │
+│           (includes UAT gate - blocks if critical tests fail)        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -203,7 +233,8 @@ Commands for creating long-lived specification artifacts.
 | `/project:constitution` | Establish project principles, code standards, and forbidden patterns | `.specify/memory/constitution.md` |
 | `/project:prd` | Create Product Requirements Document following spec-kit methodology | `.specify/specs/{feature}/spec.md` |
 | `/project:srs` | Generate Implementation Plan and Technical Design Specification | `plan.md`, `data-model.md`, `contracts/` |
-| `/project:scrum` | Generate sprint-ready task breakdown with beads issue tracking | `.beads/issues.jsonl`, `tasks.md` |
+| `/project:scrum` | Generate sprint-ready task breakdown with beads issue tracking + E2E tasks | `.beads/issues.jsonl`, `tasks.md` |
+| `/project:uat` | Generate UAT plan and Playwright E2E test skeletons from spec.md | `uat-plan.md`, `e2e/*.spec.ts` |
 | `/project:validate` | Validate specifications against project constitution | Validation report |
 | `/project:ux` | Create UX specification and research document | UX research document |
 | `/project:ui` | Create UI implementation plan from UXCanvas designs | `ui-implementation-*.md` |
@@ -220,9 +251,10 @@ Commands for sprint execution and session management.
 |---------|-------------|--------------|
 | `/session:init` | Initialize project for AI-assisted development | Directory structure, CLAUDE.md, git setup, **beads init** |
 | `/session:plan` | Create sprint task graph with dependencies | DAG generation, critical path analysis, beads issue creation |
-| `/session:implement` | Sequential task execution with TDD workflow | Red-Green-Refactor, **beads tracking**, `--start-from TASK-ID` |
+| `/session:implement` | Sequential task execution with TDD workflow | Red-Green-Refactor, **beads tracking**, **E2E verification phase** |
 | `/session:parallel` | Parallel execution with git worktrees | 3-5 concurrent workers, **beads coordination**, `BEADS_NO_DAEMON=1` |
-| `/session:end` | Sprint closeout with validation gates | 80% coverage gate, `bd doctor`, `bd sync` |
+| `/session:uat` | Execute UAT tests (automated or interactive) | Playwright automation, Chrome DevTools, API host validation |
+| `/session:end` | Sprint closeout with validation gates | 80% coverage, **UAT gate**, API host validation, `bd sync` |
 
 #### Session Command Arguments
 
@@ -235,6 +267,14 @@ Commands for sprint execution and session management.
 ```
 /session:parallel [sprint-number] [--dry-run] [--max-workers N] [--resume] [--cleanup]
 ```
+
+**`/session:uat`**:
+```
+/session:uat [feature-name] [--mode automated|interactive|both] [--env staging|local] [--scenario UAT-xxx]
+```
+- `automated`: Run Playwright tests (default, CI/CD friendly)
+- `interactive`: Use Chrome DevTools Protocol for real-time testing
+- `both`: Run automated first, then interactive for failures
 
 > **Note**: Task tracking uses [beads](https://github.com/steveyegge/beads) - a distributed, git-backed issue tracker designed for AI agents. Hash-based IDs prevent merge conflicts in parallel execution.
 
@@ -340,17 +380,24 @@ This creates `.claude/` with symlinks to:
    # 4. Generate implementation plan
    /project:srs
 
-   # 5. Create sprint tasks (creates beads issues)
+   # 5. Create sprint tasks (creates beads issues + E2E tasks)
    /project:scrum
 
-   # 6. Plan the sprint
+   # 6. Generate UAT plan and E2E test skeletons
+   /project:uat
+
+   # 7. Plan the sprint
    /session:plan
 
-   # 7. Execute tasks (choose one)
-   /session:implement              # Sequential execution
+   # 8. Execute tasks (choose one)
+   /session:implement              # Sequential execution (includes E2E verification)
    /session:parallel --max-workers 3  # Parallel execution (uses beads coordination)
 
-   # 8. Close out the sprint
+   # 9. Execute UAT tests
+   /session:uat feature-name --mode automated  # Playwright tests
+   /session:uat feature-name --mode interactive  # Chrome DevTools
+
+   # 10. Close out the sprint (includes UAT gate)
    /session:end
    ```
 
