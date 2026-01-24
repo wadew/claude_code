@@ -7,8 +7,8 @@
 
 set -euo pipefail
 
-# Source directory for symlinks
-SOURCE_DIR="$HOME/Code/claude_code"
+# Source directory for symlinks is the directory of this script
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors for output
 RED='\033[0;31m'
