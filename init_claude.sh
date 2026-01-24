@@ -117,7 +117,7 @@ main() {
     fi
 
     # Step 2: Create subdirectories
-    for subdir in agents commands skills scripts; do
+    for subdir in claude_agents claude_commands claude_skills scripts; do
         local dir_path="$claude_dir/$subdir"
         if [[ ! -d "$dir_path" ]]; then
             mkdir -p "$dir_path"
@@ -127,15 +127,15 @@ main() {
         fi
     done
 
-    # Step 3-5: Create symlinked directories in commands
+    # Step 3-5: Create symlinked directories in claude_commands
     log_info "Creating command directory symlinks..."
-    create_symlink_dir "$SOURCE_DIR/commands/project" "$claude_dir/commands/project"
-    create_symlink_dir "$SOURCE_DIR/commands/session" "$claude_dir/commands/session"
-    create_symlink_dir "$SOURCE_DIR/commands/scripts" "$claude_dir/commands/scripts"
+    create_symlink_dir "$SOURCE_DIR/claude_commands/project" "$claude_dir/claude_commands/project"
+    create_symlink_dir "$SOURCE_DIR/claude_commands/session" "$claude_dir/claude_commands/session"
+    create_symlink_dir "$SOURCE_DIR/claude_commands/scripts" "$claude_dir/claude_commands/scripts"
 
     # Step 6: Create symlinked file for validate-gitlab-ci.md
     log_info "Creating command file symlinks..."
-    create_symlink_file "$SOURCE_DIR/commands/validate-gitlab-ci.md" "$claude_dir/commands/validate-gitlab-ci.md"
+    create_symlink_file "$SOURCE_DIR/claude_commands/validate-gitlab-ci.md" "$claude_dir/claude_commands/validate-gitlab-ci.md"
 
     # Step 7: Create symlink for scripts directory (beads migration, etc.)
     log_info "Creating scripts symlinks..."
@@ -143,23 +143,23 @@ main() {
 
     # Core agents for /session:* workflow
     log_info "Creating core workflow agent symlinks..."
-    create_symlink_file "$SOURCE_DIR/agents/sprint-worker.md" "$claude_dir/agents/sprint-worker.md"
-    create_symlink_file "$SOURCE_DIR/agents/tdd-modular-architect.md" "$claude_dir/agents/tdd-modular-architect.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/sprint-worker.md" "$claude_dir/claude_agents/sprint-worker.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/tdd-modular-architect.md" "$claude_dir/claude_agents/tdd-modular-architect.md"
 
     # Domain expert agents
     log_info "Creating domain expert agent symlinks..."
-    create_symlink_file "$SOURCE_DIR/agents/ai_engineering-expert.md" "$claude_dir/agents/ai_engineering-expert.md"
-    create_symlink_file "$SOURCE_DIR/agents/postgresql-expert.md" "$claude_dir/agents/postgresql-expert.md"
-    create_symlink_file "$SOURCE_DIR/agents/security-expert.md" "$claude_dir/agents/security-expert.md"
-    create_symlink_file "$SOURCE_DIR/agents/backend-systems-architect-expert.md" "$claude_dir/agents/backend-systems-architect-expert.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/ai_engineering-expert.md" "$claude_dir/claude_agents/ai_engineering-expert.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/postgresql-expert.md" "$claude_dir/claude_agents/postgresql-expert.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/security-expert.md" "$claude_dir/claude_agents/security-expert.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/backend-systems-architect-expert.md" "$claude_dir/claude_agents/backend-systems-architect-expert.md"
 
     # Ideation sub-agents (supporting /project:ideate command)
     log_info "Creating ideation agent symlinks..."
-    create_symlink_file "$SOURCE_DIR/agents/ideation-market-researcher.md" "$claude_dir/agents/ideation-market-researcher.md"
-    create_symlink_file "$SOURCE_DIR/agents/ideation-competitive-analyst.md" "$claude_dir/agents/ideation-competitive-analyst.md"
-    create_symlink_file "$SOURCE_DIR/agents/ideation-validation-designer.md" "$claude_dir/agents/ideation-validation-designer.md"
-    create_symlink_file "$SOURCE_DIR/agents/ideation-persona-builder.md" "$claude_dir/agents/ideation-persona-builder.md"
-    create_symlink_file "$SOURCE_DIR/agents/ideation-unit-economics.md" "$claude_dir/agents/ideation-unit-economics.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/ideation-market-researcher.md" "$claude_dir/claude_agents/ideation-market-researcher.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/ideation-competitive-analyst.md" "$claude_dir/claude_agents/ideation-competitive-analyst.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/ideation-validation-designer.md" "$claude_dir/claude_agents/ideation-validation-designer.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/ideation-persona-builder.md" "$claude_dir/claude_agents/ideation-persona-builder.md"
+    create_symlink_file "$SOURCE_DIR/claude_agents/ideation-unit-economics.md" "$claude_dir/claude_agents/ideation-unit-economics.md"
 
     echo ""
     log_info "Claude Code initialization complete for: $target_path"
