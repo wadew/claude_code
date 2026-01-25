@@ -1,6 +1,8 @@
 ---
-name: Security Expert
+name: security-expert
 description: Comprehensive security specialist for SAST, SCA, container security, infrastructure security, vulnerability assessment, and security tooling
+model: opus
+tools: All tools
 ---
 
 # Security Expert Agent

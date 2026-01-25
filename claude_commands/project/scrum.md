@@ -675,6 +675,397 @@ When allocating to sprints, E2E tasks should:
 **Note**: T-API-VAL-001 must pass before sprint can close.
 ```
 
+## Step 2E: Generate UI Wiring Tasks (from Event Flow Documentation)
+
+**Purpose**: Transform Event Flow Documentation from `/project:ui` into explicit wiring tasks. These tasks ensure handlers perform real actions, not `console.log()` stubs.
+
+### Read Event Flow Table
+
+Parse the Event Flow Documentation from `ui-implementation.md`:
+
+```python
+def parse_event_flow_table(ui_implementation_path):
+    """Extract interactive elements requiring wiring tasks."""
+
+    with open(ui_implementation_path) as f:
+        content = f.read()
+
+    # Find Event Flow Documentation section
+    event_flow_section = extract_section(content, "Event Flow Documentation")
+
+    # Parse the table rows
+    events = []
+    table_pattern = r'\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|'
+
+    for match in re.finditer(table_pattern, event_flow_section):
+        component, element, handler, action_type, target, api_call = match.groups()
+
+        # Skip header row
+        if 'Component' in component or '---' in component:
+            continue
+
+        events.append({
+            "component": component.strip(),
+            "element": element.strip(),
+            "handler": handler.strip(),
+            "action_type": action_type.strip(),
+            "target": target.strip(),
+            "api_call": api_call.strip()
+        })
+
+    return events
+```
+
+### Generate Wiring Tasks
+
+For each component with interactive elements, generate a `-WIRE` task:
+
+```python
+def generate_wiring_tasks(events, component_tasks):
+    """Generate wiring tasks from event flow documentation."""
+
+    wiring_tasks = []
+
+    # Group events by component
+    by_component = {}
+    for event in events:
+        comp = event["component"]
+        if comp not in by_component:
+            by_component[comp] = []
+        by_component[comp].append(event)
+
+    for component, handlers in by_component.items():
+        # Find the base component task
+        base_task = find_task_by_component(component_tasks, component)
+        base_task_id = base_task["id"] if base_task else "T-NEW"
+
+        # Create wiring task
+        wiring_task = {
+            "id": f"{base_task_id}-WIRE",
+            "title": f"Wire {component} handlers to actions",
+            "domain": "frontend",
+            "complexity": "simple",
+            "priority": "P1",
+            "dependencies": [base_task_id] if base_task else [],
+            "estimated_hours": len(handlers) * 0.5,  # 30 min per handler
+            "acceptance_criteria": [],
+            "test_requirements": []
+        }
+
+        # Add acceptance criteria per handler
+        for handler in handlers:
+            if handler["action_type"] == "Navigate":
+                wiring_task["acceptance_criteria"].append(
+                    f"`{handler['handler']}` navigates to `{handler['target']}`"
+                )
+                wiring_task["test_requirements"].append(
+                    f"E2E: Click {handler['element']} → URL contains {handler['target']}"
+                )
+            elif "API Call" in handler["action_type"]:
+                wiring_task["acceptance_criteria"].append(
+                    f"`{handler['handler']}` calls `{handler['api_call']}`"
+                )
+                wiring_task["test_requirements"].append(
+                    f"E2E: Click {handler['element']} → API request to {handler['api_call']}"
+                )
+            elif handler["action_type"] == "Open Modal":
+                wiring_task["acceptance_criteria"].append(
+                    f"`{handler['handler']}` opens {handler['target']}"
+                )
+                wiring_task["test_requirements"].append(
+                    f"E2E: Click {handler['element']} → Modal visible"
+                )
+
+        # Add anti-stub requirement
+        wiring_task["acceptance_criteria"].append(
+            "NO console.log() or empty arrow functions in handlers"
+        )
+
+        wiring_tasks.append(wiring_task)
+
+    return wiring_tasks
+```
+
+### Wiring Task Template
+
+```yaml
+- id: T-{XXX}-WIRE
+  title: "Wire {ComponentName} handlers to actions"
+  domain: frontend
+  complexity: simple
+  priority: P1
+  dependencies:
+    - T-{XXX}  # Base component implementation
+  estimated_hours: {N * 0.5}  # 30 min per handler
+  acceptance_criteria:
+    - "`onStart` navigates to /tasks/{taskId}"
+    - "`onReviewGoals` navigates to /goals"
+    - "`onAddTask` opens QuickCaptureModal"
+    - "NO console.log() or empty arrow functions in handlers"
+  test_requirements:
+    - "E2E test: click Start → verify navigation to /tasks/{id}"
+    - "E2E test: click Add Task → verify modal opens"
+    - "Integration test: NO MOCKS for handler behavior verification"
+  references:
+    - UI Plan: ui-implementation.md#event-flow-documentation
+    - SRS: spec.md#{relevant-FR}
+```
+
+### Example Wiring Tasks Output
+
+```markdown
+### T-012-WIRE: Wire MiaCard handlers to actions
+- **Status**: pending
+- **Domain**: frontend
+- **Complexity**: simple
+- **Priority**: P1
+- **Dependencies**: T-012 (MiaCard Component)
+- **Estimated Hours**: 1.5
+- **Acceptance Criteria**:
+  - [ ] `onStart(taskId)` → `router.push(\`/tasks/${taskId}\`)`
+  - [ ] `onReviewGoals()` → `router.push('/goals')`
+  - [ ] `onAddTask()` → Opens QuickCaptureModal
+  - [ ] NO console.log() or empty arrow functions
+- **Test Requirements**:
+  - E2E: Click "Start Now" → URL is /tasks/{id}
+  - E2E: Click "Review Goals" → URL is /goals
+  - E2E: Click "Add Task" → Modal is visible
+- **References**:
+  - UI Plan: ui-implementation.md#event-flow-miacard
+  - SRS: spec.md#FR-Task-Management
+
+### T-015-WIRE: Wire TaskCard handlers to actions
+- **Status**: pending
+- **Domain**: frontend
+- **Complexity**: simple
+- **Priority**: P1
+- **Dependencies**: T-015 (TaskCard Component)
+- **Estimated Hours**: 1.5
+- **Acceptance Criteria**:
+  - [ ] `onToggleComplete(taskId, completed)` → calls `PATCH /tasks/{id}`
+  - [ ] `onEdit(taskId)` → `router.push(\`/tasks/${taskId}/edit\`)`
+  - [ ] `onDelete(taskId)` → Confirmation dialog then `DELETE /tasks/{id}`
+  - [ ] NO console.log() or empty arrow functions
+- **Test Requirements**:
+  - E2E: Check checkbox → API call made, task status updated
+  - E2E: Click Edit → URL is /tasks/{id}/edit
+  - E2E: Click Delete → Confirm dialog, then API call
+```
+
+## Step 2F: Generate Page Data Loading Tasks
+
+**Purpose**: Ensure every page loads its required data on mount, preventing empty UI states.
+
+### Read Data Loading Requirements
+
+Parse Page Data Loading Requirements from `ui-implementation.md`:
+
+```python
+def parse_data_loading_requirements(ui_implementation_path):
+    """Extract page data loading requirements."""
+
+    with open(ui_implementation_path) as f:
+        content = f.read()
+
+    # Find Data Loading Requirements section
+    data_section = extract_section(content, "Page Data Loading Requirements")
+
+    pages = []
+    table_pattern = r'\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|'
+
+    for match in re.finditer(table_pattern, data_section):
+        page, data_required, store_method, api_endpoint, load_trigger = match.groups()
+
+        if 'Page' in page and '---' not in page:
+            continue  # Skip header
+
+        pages.append({
+            "page": page.strip(),
+            "data_required": data_required.strip(),
+            "store_method": store_method.strip(),
+            "api_endpoint": api_endpoint.strip(),
+            "load_trigger": load_trigger.strip()
+        })
+
+    return pages
+```
+
+### Generate Data Loading Tasks
+
+For each page, generate a `-DATA` task:
+
+```python
+def generate_data_loading_tasks(pages, page_tasks):
+    """Generate data loading tasks for each page."""
+
+    data_tasks = []
+
+    for page_info in pages:
+        page_name = page_info["page"]
+
+        # Find the base page task
+        base_task = find_task_by_page(page_tasks, page_name)
+        base_task_id = base_task["id"] if base_task else "T-NEW"
+
+        data_task = {
+            "id": f"{base_task_id}-DATA",
+            "title": f"Wire {page_name} data loading",
+            "domain": "frontend",
+            "complexity": "simple",
+            "priority": "P0",  # Higher priority - pages need data
+            "dependencies": [base_task_id] if base_task else [],
+            "estimated_hours": 1.0,
+            "acceptance_criteria": [
+                f"useEffect calls `{page_info['store_method']}` on mount",
+                "Loading spinner shown during fetch",
+                "Error state shows user-friendly message with retry",
+                "Empty state shows appropriate UI (not blank)",
+            ],
+            "test_requirements": [
+                f"Integration: Page mount → `{page_info['api_endpoint']}` called",
+                "Integration: API error → Error message displayed",
+                "Integration: Empty response → Empty state UI shown",
+                "NO MOCKS for data presence verification"
+            ],
+            "references": {
+                "api_endpoint": page_info["api_endpoint"],
+                "store_method": page_info["store_method"]
+            }
+        }
+
+        data_tasks.append(data_task)
+
+    return data_tasks
+```
+
+### Data Loading Task Template
+
+```yaml
+- id: T-{XXX}-DATA
+  title: "Wire {PageName} data loading"
+  domain: frontend
+  complexity: simple
+  priority: P0  # Blocking - pages need data to function
+  dependencies:
+    - T-{XXX}  # Base page implementation
+  estimated_hours: 1.0
+  acceptance_criteria:
+    - "useEffect calls store method on mount"
+    - "Loading state shows spinner/skeleton"
+    - "Error state shows message with retry button"
+    - "Empty state shows appropriate UI"
+    - "Data renders when API returns successfully"
+  test_requirements:
+    - "Integration: page load → API endpoint called"
+    - "Integration: API error → error UI shown"
+    - "Integration: empty response → empty state shown"
+    - "NO MOCKS for verifying data actually loads"
+  references:
+    - UI Plan: ui-implementation.md#data-loading-requirements
+    - API: {endpoint from SRS}
+```
+
+### Example Data Loading Tasks Output
+
+```markdown
+### T-020-DATA: Wire Dashboard data loading
+- **Status**: pending
+- **Domain**: frontend
+- **Complexity**: simple
+- **Priority**: P0
+- **Dependencies**: T-020 (Dashboard Page Layout)
+- **Estimated Hours**: 1.0
+- **Acceptance Criteria**:
+  - [ ] `useEffect` calls `loadDashboard()` on mount
+  - [ ] Loading shows DashboardSkeleton component
+  - [ ] Error shows ErrorState with retry button
+  - [ ] Empty state shows "No recent activity" message
+- **Test Requirements**:
+  - Integration: Navigate to /dashboard → `GET /dashboard` called
+  - Integration: API error → Error message + retry visible
+  - Integration: Success → Dashboard data renders
+- **References**:
+  - API: GET /api/v1/dashboard
+  - Store: dashboardStore.loadDashboard()
+
+### T-025-DATA: Wire TasksPage data loading
+- **Status**: pending
+- **Domain**: frontend
+- **Complexity**: simple
+- **Priority**: P0
+- **Dependencies**: T-025 (Tasks Page Layout)
+- **Estimated Hours**: 1.0
+- **Acceptance Criteria**:
+  - [ ] `useEffect` calls `loadTasks()` on mount
+  - [ ] Loading shows TaskListSkeleton component
+  - [ ] Error shows ErrorState with retry button
+  - [ ] Empty state shows "No tasks yet" with Add Task button
+- **Test Requirements**:
+  - Integration: Navigate to /tasks → `GET /tasks` called
+  - Integration: API error → Error message visible
+  - Integration: Empty → Empty state with "Add Task" CTA
+```
+
+## Step 2G: Task Dependency Linking
+
+After generating wiring and data loading tasks, ensure proper dependency chains:
+
+```python
+def link_task_dependencies(all_tasks):
+    """
+    Ensure proper dependency order:
+    1. Base component/page task
+    2. Wiring task (depends on base)
+    3. Data loading task (depends on base)
+    4. E2E tests (depends on wiring + data)
+    """
+
+    for task in all_tasks:
+        task_id = task["id"]
+
+        # If this is an E2E task, add wiring/data dependencies
+        if "-E2E-" in task_id or task["domain"] == "e2e":
+            # Find related component tasks
+            component_match = re.search(r'T-(\d+)', task_id)
+            if component_match:
+                base_id = f"T-{component_match.group(1)}"
+                wire_id = f"{base_id}-WIRE"
+                data_id = f"{base_id}-DATA"
+
+                # Add dependencies if tasks exist
+                if task_exists(wire_id, all_tasks):
+                    task["dependencies"].append(wire_id)
+                if task_exists(data_id, all_tasks):
+                    task["dependencies"].append(data_id)
+
+    return all_tasks
+```
+
+### Task Dependency Visualization
+
+```mermaid
+graph TD
+    T012[T-012: MiaCard Component]
+    T012WIRE[T-012-WIRE: Wire MiaCard handlers]
+    T012E2E[T-E2E-012: MiaCard E2E Tests]
+
+    T020[T-020: Dashboard Page]
+    T020DATA[T-020-DATA: Wire Dashboard data loading]
+    T020E2E[T-E2E-020: Dashboard E2E Tests]
+
+    T012 --> T012WIRE
+    T012WIRE --> T012E2E
+
+    T020 --> T020DATA
+    T020DATA --> T020E2E
+
+    T012WIRE --> T020E2E
+```
+
+**Key Principle**: E2E tests CANNOT pass if:
+1. Wiring tasks are incomplete (handlers are `console.log()`)
+2. Data loading tasks are incomplete (pages show empty arrays)
+
 # PHASE 3: DEPENDENCY ANALYSIS
 
 ## Step 3A: Identify Dependencies

@@ -773,6 +773,261 @@ print("\n✅ UAT validation PASSED")
 
 ---
 
+## Phase 1.72: Integration Reality Check (BLOCKING)
+
+**Purpose**: Verify that the application actually WORKS, not just that tests pass. This catches "phantom green" scenarios where:
+- All tests pass (because they're mocked)
+- But the app doesn't work (handlers are `console.log()`, pages don't load data)
+
+**Status**: 🔍 Running integration reality tests...
+
+### Step 1.72.1: Detect Frontend Features
+
+```python
+import subprocess
+import os
+import glob
+import json
+
+print("\n" + "="*80)
+print("🔌 INTEGRATION REALITY CHECK")
+print("="*80)
+print("\nVerifying handlers work and pages load data (no mocks)...")
+
+# Check if this project has frontend code
+frontend_dirs = ["src", "app", "components", "pages"]
+has_frontend = any(os.path.isdir(d) for d in frontend_dirs)
+
+# Check for TypeScript/JavaScript files
+frontend_files = []
+for ext in ['*.tsx', '*.jsx', '*.ts', '*.js']:
+    frontend_files.extend(glob.glob(f"src/**/{ext}", recursive=True))
+    frontend_files.extend(glob.glob(f"app/**/{ext}", recursive=True))
+
+# Filter out test files
+frontend_files = [f for f in frontend_files if '.test.' not in f and '.spec.' not in f]
+
+if not has_frontend or len(frontend_files) == 0:
+    print("\nℹ️  No frontend code detected - skipping integration reality check")
+    integration_reality_metrics = {"skipped": True, "reason": "No frontend code"}
+else:
+    print(f"\n📂 Frontend files detected: {len(frontend_files)}")
+```
+
+### Step 1.72.2: Scan for Stub Handlers
+
+```python
+import re
+
+stub_patterns = [
+    # console.log in handlers
+    (r'onClick=\{[^}]*console\.log[^}]*\}', "onClick handler is console.log() stub"),
+    (r'onSubmit=\{[^}]*console\.log[^}]*\}', "onSubmit handler is console.log() stub"),
+    (r'on\w+=\{[^}]*console\.log[^}]*\}', "Handler contains console.log() stub"),
+
+    # Empty handlers
+    (r'onClick=\{\(\)\s*=>\s*\{\s*\}\}', "onClick is empty arrow function"),
+    (r'onSubmit=\{\(\)\s*=>\s*\{\s*\}\}', "onSubmit is empty arrow function"),
+    (r'on\w+=\{\(\)\s*=>\s*\{\s*\}\}', "Handler is empty arrow function"),
+
+    # TODO comments about wiring
+    (r'//\s*TODO:?\s*(wire|connect|implement|add\s+action)', "TODO comment about wiring"),
+]
+
+stub_findings = []
+
+for filepath in frontend_files:
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+
+        for pattern, description in stub_patterns:
+            matches = list(re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE))
+            for match in matches:
+                line_num = content[:match.start()].count('\n') + 1
+                stub_findings.append({
+                    "file": filepath,
+                    "line": line_num,
+                    "issue": description,
+                    "snippet": match.group()[:50]
+                })
+    except Exception as e:
+        pass  # Skip unreadable files
+
+if stub_findings:
+    print(f"\n❌ Found {len(stub_findings)} stub handler(s):")
+    for finding in stub_findings[:10]:
+        print(f"   {finding['file']}:{finding['line']} - {finding['issue']}")
+    if len(stub_findings) > 10:
+        print(f"   ... and {len(stub_findings) - 10} more")
+else:
+    print("\n✅ No stub handlers detected")
+```
+
+### Step 1.72.3: Scan for Missing Data Loading
+
+```python
+# Pages that should load data on mount
+page_files = [f for f in frontend_files if 'page' in f.lower() or '/pages/' in f or '/app/' in f]
+
+missing_data_loading = []
+
+for filepath in page_files:
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+
+        # Check if page has data requirements but no loading mechanism
+        has_data_reference = any(pattern in content.lower() for pattern in [
+            'tasks', 'users', 'items', 'data', 'list', 'fetch'
+        ])
+        has_use_effect = 'useEffect' in content
+        has_react_query = 'useQuery' in content or 'useSWR' in content
+
+        # Check for arrays that are never loaded
+        empty_array_patterns = [
+            r'const\s+\w+\s*=\s*\[\s*\]',  # const tasks = []
+            r'useState\(\[\]\)',            # useState([])
+        ]
+        has_empty_array = any(re.search(p, content) for p in empty_array_patterns)
+
+        if has_data_reference and has_empty_array:
+            if not has_use_effect and not has_react_query:
+                missing_data_loading.append({
+                    "file": filepath,
+                    "issue": "Has data arrays but no useEffect/useQuery to load them"
+                })
+
+    except Exception as e:
+        pass
+
+if missing_data_loading:
+    print(f"\n❌ Found {len(missing_data_loading)} page(s) with missing data loading:")
+    for finding in missing_data_loading[:5]:
+        print(f"   {finding['file']} - {finding['issue']}")
+else:
+    print("✅ Pages appear to have data loading mechanisms")
+```
+
+### Step 1.72.4: Run Integration Reality Tests (if available)
+
+```python
+# Check for integration reality tests
+integration_test_patterns = [
+    ".specify/specs/**/e2e/*.spec.ts",
+    "e2e/**/*.spec.ts",
+    "tests/e2e/**/*.spec.ts",
+]
+
+integration_tests = []
+for pattern in integration_test_patterns:
+    integration_tests.extend(glob.glob(pattern, recursive=True))
+
+# Filter to @integration-reality tagged tests
+reality_tests = []
+for test_file in integration_tests:
+    try:
+        with open(test_file, 'r') as f:
+            if '@integration-reality' in f.read():
+                reality_tests.append(test_file)
+    except:
+        pass
+
+if reality_tests:
+    print(f"\n🧪 Running {len(reality_tests)} integration reality test file(s)...")
+
+    result = subprocess.run(
+        ["npx", "playwright", "test", "--grep", "@integration-reality", "--reporter=list"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={**os.environ, "DISABLE_MOCKS": "true"}
+    )
+
+    integration_tests_passed = result.returncode == 0
+
+    if not integration_tests_passed:
+        print(f"\n❌ Integration reality tests FAILED")
+        print(result.stdout[-1000:] if len(result.stdout) > 1000 else result.stdout)
+    else:
+        print("✅ Integration reality tests passed")
+else:
+    print("\nℹ️  No @integration-reality tests found")
+    print("   Consider adding integration tests that verify handlers work without mocks")
+    integration_tests_passed = True  # Don't block if no tests exist yet
+```
+
+### Step 1.72.5: Block on Critical Issues
+
+```python
+# Determine if we should block
+critical_issues = []
+
+# Stub handlers are critical
+if len(stub_findings) > 0:
+    critical_issues.append(f"{len(stub_findings)} stub handler(s) detected")
+
+# Missing data loading is critical if pages exist
+if len(missing_data_loading) > 0:
+    critical_issues.append(f"{len(missing_data_loading)} page(s) missing data loading")
+
+# Failed integration tests are critical
+if 'integration_tests_passed' in dir() and not integration_tests_passed:
+    critical_issues.append("Integration reality tests failed")
+
+if critical_issues:
+    print("\n" + "="*80)
+    print("❌ BLOCKING: INTEGRATION REALITY CHECK FAILED")
+    print("="*80)
+    print("\nYour tests pass, but the application may not actually work.")
+    print("This is the 'phantom green' problem - mocked tests hide real issues.\n")
+    print("Critical Issues Found:")
+    for issue in critical_issues:
+        print(f"  ❌ {issue}")
+    print("\n" + "-"*40)
+    print("Common Causes:")
+    print("  1. Button handlers are console.log() instead of router.push()")
+    print("  2. Pages don't call loadData() in useEffect on mount")
+    print("  3. E2E tests mock the API, hiding integration failures")
+    print("\n" + "-"*40)
+    print("Required Fixes:")
+    print("")
+    if stub_findings:
+        print("  📌 Replace stub handlers with real actions:")
+        print("     ❌ onClick={() => console.log('Start')}")
+        print("     ✅ onClick={() => router.push(`/tasks/${id}`)}")
+        print("")
+    if missing_data_loading:
+        print("  📌 Add data loading to pages:")
+        print("     useEffect(() => {")
+        print("       loadTasks();")
+        print("     }, [loadTasks]);")
+        print("")
+    print("After fixing, re-run /session:end")
+    print("="*80)
+    EXIT_COMMAND()
+
+# Store metrics for sprint summary
+integration_reality_metrics = {
+    "stub_handlers_found": len(stub_findings),
+    "missing_data_loading": len(missing_data_loading),
+    "integration_tests_run": len(reality_tests),
+    "integration_tests_passed": integration_tests_passed if 'integration_tests_passed' in dir() else None,
+    "validation_passed": len(critical_issues) == 0
+}
+
+print(f"\n📊 Integration Reality Summary:")
+print(f"   Stub handlers: {len(stub_findings)} ({'✅' if len(stub_findings) == 0 else '❌'})")
+print(f"   Missing data loading: {len(missing_data_loading)} ({'✅' if len(missing_data_loading) == 0 else '❌'})")
+print(f"   Integration tests: {len(reality_tests)} files")
+
+print("\n✅ Integration Reality Check PASSED")
+```
+
+**Status**: ✅ Phase 1.72 Complete
+
+---
+
 ## Phase 1.75: Code Quality Self-Reflection (BLOCKING)
 
 **Purpose**: Perform LLM-based self-evaluation of code written during this session to determine if a second pass would result in better code. This is a blocking validation - if quality is poor (Grade D or F), the session cannot end until improvements are made.

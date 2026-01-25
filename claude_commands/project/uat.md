@@ -761,6 +761,295 @@ For exploratory testing or debugging failed scenarios:
 └── api-logs/                 # API call recordings
 ```
 
+## Integration Reality Tests (MANDATORY - No Mocks)
+
+**Purpose**: Standard E2E tests often mock API responses, which hides integration failures. Integration Reality tests verify that buttons actually work, pages actually load data, and the frontend correctly communicates with the backend.
+
+### Why Integration Reality Tests?
+
+| Test Type | Mocks Allowed | What It Verifies | Catches |
+|-----------|---------------|------------------|---------|
+| Unit Tests | Yes | Component logic in isolation | Logic bugs |
+| E2E (Behavior) | Yes | UI renders correctly with data | UI bugs |
+| **Integration Reality** | **NO** | Buttons work, data loads, auth works | **Wiring bugs** |
+
+**Wiring bugs** are when:
+- Handlers are `console.log()` instead of real actions
+- Pages don't call `loadData()` on mount
+- API endpoints are hardcoded or wrong
+- Auth tokens aren't passed correctly
+
+### Integration Reality Test Requirements
+
+For each feature with frontend components, generate BOTH:
+
+**1. Standard E2E Tests (with mocks)** - Test UI behavior predictably:
+```typescript
+test.describe('Standard E2E: Login', () => {
+  test('displays login form correctly', async ({ page }) => {
+    // Mock the API to return predictable data
+    await page.route('**/api/v1/auth/login', async route => {
+      await route.fulfill({
+        status: 200,
+        json: { token: 'mock-token', user: mockUser }
+      });
+    });
+
+    await page.goto('/login');
+    await page.fill('[name="email"]', 'test@example.com');
+    await page.fill('[name="password"]', 'password123');
+    await page.click('button[type="submit"]');
+
+    // Verify UI behavior
+    await expect(page).toHaveURL('/dashboard');
+  });
+});
+```
+
+**2. Integration Reality Tests (NO mocks)** - Test actual wiring:
+```typescript
+test.describe('@integration-reality Login', () => {
+  test.beforeEach(async ({ page }) => {
+    // NO MOCKS - hit real API
+  });
+
+  test('login button actually calls API', async ({ page }) => {
+    await page.goto('/login');
+
+    // Wait for and capture the actual API call
+    const responsePromise = page.waitForResponse('**/api/v1/auth/login');
+
+    await page.fill('[name="email"]', 'test@example.com');
+    await page.fill('[name="password"]', 'password123');
+    await page.click('button[type="submit"]');
+
+    // Verify REAL API was called
+    const response = await responsePromise;
+    expect(response.ok()).toBe(true);
+
+    // Verify we navigated (not just console.log'd)
+    await expect(page).toHaveURL(/dashboard/);
+  });
+
+  test('dashboard loads data on mount', async ({ page }) => {
+    // Login first (real auth)
+    await loginAsTestUser(page);
+
+    // Navigate to dashboard
+    const apiPromise = page.waitForResponse('**/api/v1/dashboard');
+    await page.goto('/dashboard');
+
+    // Verify API was actually called
+    const response = await apiPromise;
+    expect(response.ok()).toBe(true);
+
+    // Verify data actually renders (not empty array)
+    await expect(page.getByTestId('dashboard-metrics')).toBeVisible();
+    await expect(page.getByTestId('task-card')).toHaveCount.greaterThan(0);
+  });
+
+  test('task checkbox actually calls API', async ({ page }) => {
+    await loginAsTestUser(page);
+    await page.goto('/tasks');
+
+    // Wait for initial data load
+    await page.waitForResponse('**/api/v1/tasks');
+
+    // Get a task checkbox
+    const checkbox = page.getByTestId('task-checkbox').first();
+
+    // Capture the API call when clicking
+    const patchPromise = page.waitForResponse(resp =>
+      resp.url().includes('/api/v1/tasks/') &&
+      resp.request().method() === 'PATCH'
+    );
+
+    await checkbox.click();
+
+    // Verify REAL API call happened
+    const patchResponse = await patchPromise;
+    expect(patchResponse.ok()).toBe(true);
+  });
+});
+```
+
+### Integration Reality Test Categories
+
+Generate tests for these categories:
+
+#### 1. Navigation Tests (buttons actually navigate)
+```typescript
+test.describe('@integration-reality Navigation', () => {
+  test('Start button navigates to task detail', async ({ page }) => {
+    await loginAsTestUser(page);
+    await page.goto('/dashboard');
+
+    // Click the Start button
+    const startButton = page.getByRole('button', { name: 'Start' }).first();
+    await startButton.click();
+
+    // Verify REAL navigation happened
+    await expect(page).toHaveURL(/\/tasks\/[a-z0-9-]+/);
+  });
+
+  test('Review Goals button navigates to goals page', async ({ page }) => {
+    await loginAsTestUser(page);
+    await page.goto('/dashboard');
+
+    await page.getByRole('button', { name: 'Review Goals' }).click();
+    await expect(page).toHaveURL('/goals');
+  });
+});
+```
+
+#### 2. Data Loading Tests (pages fetch on mount)
+```typescript
+test.describe('@integration-reality Data Loading', () => {
+  test('Tasks page loads tasks on mount', async ({ page }) => {
+    await loginAsTestUser(page);
+
+    const apiPromise = page.waitForResponse('**/api/v1/tasks');
+    await page.goto('/tasks');
+
+    // API must be called
+    const response = await apiPromise;
+    expect(response.ok()).toBe(true);
+
+    // Data must render
+    const tasks = await response.json();
+    if (tasks.data.length > 0) {
+      await expect(page.getByTestId('task-card')).toHaveCount.greaterThan(0);
+    } else {
+      await expect(page.getByTestId('empty-state')).toBeVisible();
+    }
+  });
+});
+```
+
+#### 3. Form Submission Tests (forms call API)
+```typescript
+test.describe('@integration-reality Forms', () => {
+  test('Create task form actually creates task', async ({ page }) => {
+    await loginAsTestUser(page);
+    await page.goto('/tasks/new');
+
+    const createPromise = page.waitForResponse(resp =>
+      resp.url().includes('/api/v1/tasks') &&
+      resp.request().method() === 'POST'
+    );
+
+    await page.fill('[name="title"]', 'Test Task');
+    await page.click('button[type="submit"]');
+
+    const response = await createPromise;
+    expect(response.status()).toBe(201);
+  });
+});
+```
+
+### Integration Reality Test Template
+
+Add this section to the generated `{feature}.spec.ts`:
+
+```typescript
+// ==========================================================================
+// INTEGRATION REALITY TESTS (NO MOCKS - REAL API)
+// ==========================================================================
+// These tests verify that the frontend is properly wired to the backend.
+// If these fail, buttons might be console.log() instead of real actions,
+// or pages might not be loading data on mount.
+//
+// Run with: npx playwright test --grep @integration-reality
+// ==========================================================================
+
+test.describe('@integration-reality {Feature Name}', () => {
+
+  // Helper to login with real credentials
+  async function loginAsTestUser(page: Page) {
+    await page.goto('/login');
+    await page.fill('[name="email"]', process.env.TEST_USER_EMAIL!);
+    await page.fill('[name="password"]', process.env.TEST_USER_PASSWORD!);
+    await page.click('button[type="submit"]');
+    await page.waitForURL(/dashboard|home/);
+  }
+
+  test('page loads data on mount (not empty)', async ({ page }) => {
+    await loginAsTestUser(page);
+
+    // Navigate and wait for API call
+    const apiPromise = page.waitForResponse('**/api/v1/{endpoint}');
+    await page.goto('/{page-path}');
+
+    // Verify API was called
+    const response = await apiPromise;
+    expect(response.ok()).toBe(true);
+
+    // Verify data rendered (not just empty array)
+    await expect(page.getByTestId('{data-element}')).toBeVisible();
+  });
+
+  test('button click performs action (not console.log)', async ({ page }) => {
+    await loginAsTestUser(page);
+    await page.goto('/{page-path}');
+
+    // Click the button
+    await page.getByRole('button', { name: '{Button Text}' }).click();
+
+    // Verify the action happened (navigation, modal, API call)
+    await expect(page).toHaveURL(/{expected-url}/);
+    // OR
+    await expect(page.getByRole('dialog')).toBeVisible();
+    // OR
+    const response = await page.waitForResponse('**/api/v1/{endpoint}');
+    expect(response.ok()).toBe(true);
+  });
+
+});
+```
+
+### Running Integration Reality Tests
+
+```bash
+# Run only integration reality tests
+npx playwright test --grep @integration-reality
+
+# Run with real API (no mock server)
+DISABLE_MOCKS=true npx playwright test --grep @integration-reality
+
+# Run against staging environment
+API_BASE_URL=https://staging.api.example.com npx playwright test --grep @integration-reality
+```
+
+### Integration Reality Gate
+
+Before a feature can be marked complete, Integration Reality tests must pass:
+
+```python
+def verify_integration_reality(feature_name):
+    """Verify integration reality tests pass before feature completion."""
+
+    result = subprocess.run(
+        ["npx", "playwright", "test", "--grep", "@integration-reality", "--reporter=json"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DISABLE_MOCKS": "true"}
+    )
+
+    if result.returncode != 0:
+        print("❌ INTEGRATION REALITY CHECK FAILED")
+        print("")
+        print("Your mocked E2E tests pass, but real integration fails.")
+        print("Common causes:")
+        print("  - Handlers are console.log() instead of real actions")
+        print("  - Pages don't load data on mount (missing useEffect)")
+        print("  - API endpoints are wrong or missing")
+        print("")
+        print("Fix the integration issues and re-run.")
+        return False
+
+    return True
+```
+
 ## Definition of Done
 
 - [ ] All Critical (smoke) scenarios PASS
@@ -769,6 +1058,11 @@ For exploratory testing or debugging failed scenarios:
 - [ ] No hardcoded API URLs detected
 - [ ] All API calls match contract specification
 - [ ] Evidence collected and stored
+- [ ] **Integration Reality tests pass (NO MOCKS)**
+  - [ ] All navigation buttons actually navigate
+  - [ ] All pages load data on mount (not empty arrays)
+  - [ ] All forms actually call APIs on submit
+  - [ ] No `console.log()` stub handlers remain
 
 ---
 

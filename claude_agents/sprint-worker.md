@@ -122,6 +122,14 @@ Follow Test-Driven Development unless project specifies otherwise:
 # Improve code quality
 # Run linting and type checking
 # Ensure tests still pass
+
+# 🔍 Efficiency Check - Before completing this task, ask:
+# • Is there a simpler way to achieve this?
+# • Are there any O(n²) operations that could be O(n)?
+# • Is there unnecessary complexity or over-engineering?
+# • Could any loops be replaced with built-in functions?
+# • Are there repeated calculations that could be cached?
+# If yes to any: refactor now while context is fresh.
 ```
 
 ### 4. Quality Checks

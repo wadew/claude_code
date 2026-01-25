@@ -627,6 +627,327 @@ def extract_feature_from_task(task):
             return match.group(1)
 
     return None
+
+
+def is_wiring_task(task):
+    """Check if this is a -WIRE task requiring handler verification."""
+    task_id = task.get("id", "")
+    title_lower = task.get("title", "").lower()
+
+    return (
+        "-WIRE" in task_id.upper() or
+        "wire" in title_lower and "handler" in title_lower
+    )
+
+
+def is_data_loading_task(task):
+    """Check if this is a -DATA task requiring data loading verification."""
+    task_id = task.get("id", "")
+    title_lower = task.get("title", "").lower()
+
+    return (
+        "-DATA" in task_id.upper() or
+        ("data" in title_lower and "loading" in title_lower) or
+        "wire" in title_lower and "data" in title_lower
+    )
+```
+
+## Step 7D-WIRE: Handler Wiring Verification (for -WIRE tasks)
+
+**Purpose**: Verify that handlers are properly wired to real actions, not left as `console.log()` stubs. This is a BLOCKING check for tasks with `-WIRE` suffix.
+
+```python
+def verify_handler_wiring(task):
+    """
+    Verify handlers are wired to real actions, not console.log stubs.
+
+    For -WIRE tasks, scan modified files for:
+    1. console.log() in onClick/onSubmit handlers
+    2. Empty arrow functions () => {}
+    3. TODO comments about wiring
+    4. Placeholder handlers
+
+    Returns: {"valid": bool, "errors": list, "warnings": list}
+    """
+    import re
+    import os
+
+    errors = []
+    warnings = []
+
+    # Patterns that indicate stub handlers (BLOCKING)
+    stub_patterns = [
+        # console.log in handlers
+        (r'onClick=\{[^}]*console\.log[^}]*\}', "onClick handler is console.log() stub"),
+        (r'onSubmit=\{[^}]*console\.log[^}]*\}', "onSubmit handler is console.log() stub"),
+        (r'onStart=\{[^}]*console\.log[^}]*\}', "onStart handler is console.log() stub"),
+        (r'onChange=\{[^}]*console\.log[^}]*\}', "onChange handler is console.log() stub"),
+        (r'on\w+=\{[^}]*console\.log[^}]*\}', "Handler contains console.log() stub"),
+
+        # Empty handlers
+        (r'onClick=\{\(\)\s*=>\s*\{\s*\}\}', "onClick is empty arrow function"),
+        (r'onSubmit=\{\(\)\s*=>\s*\{\s*\}\}', "onSubmit is empty arrow function"),
+        (r'on\w+=\{\(\)\s*=>\s*\{\s*\}\}', "Handler is empty arrow function"),
+        (r'on\w+=\{\(\)\s*=>\s*null\}', "Handler returns null (placeholder)"),
+        (r'on\w+=\{\(\)\s*=>\s*undefined\}', "Handler returns undefined (placeholder)"),
+
+        # TODO/FIXME comments about wiring
+        (r'//\s*TODO:?\s*(wire|connect|implement|add\s+action)', "TODO comment about wiring found"),
+        (r'//\s*FIXME:?\s*(wire|handler|onclick)', "FIXME comment about handler found"),
+    ]
+
+    # Warning patterns (non-blocking but should be reviewed)
+    warning_patterns = [
+        (r'onClick=\{[^}]*alert\([^}]*\}', "onClick uses alert() - likely placeholder"),
+        (r'console\.log\([\'"]click', "console.log for click event - debug code?"),
+        (r'console\.log\([\'"]handle', "console.log for handler - debug code?"),
+    ]
+
+    files_to_scan = task.get("files_affected", [])
+
+    for file_info in files_to_scan:
+        filepath = file_info.get("path", file_info) if isinstance(file_info, dict) else file_info
+
+        # Only scan frontend files
+        if not any(filepath.endswith(ext) for ext in ['.ts', '.tsx', '.js', '.jsx', '.vue', '.svelte']):
+            continue
+
+        if not os.path.exists(filepath):
+            continue
+
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read()
+                lines = content.split('\n')
+
+            # Check for stub patterns (BLOCKING)
+            for pattern, description in stub_patterns:
+                matches = list(re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE))
+                for match in matches:
+                    # Find line number
+                    line_num = content[:match.start()].count('\n') + 1
+                    errors.append(
+                        f"{filepath}:{line_num} - {description}\n"
+                        f"    Found: {match.group()[:60]}..."
+                    )
+
+            # Check for warning patterns
+            for pattern, description in warning_patterns:
+                matches = list(re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE))
+                for match in matches:
+                    line_num = content[:match.start()].count('\n') + 1
+                    warnings.append(
+                        f"{filepath}:{line_num} - {description}"
+                    )
+
+            # Check that navigation handlers actually use router
+            if 'Navigate' in task.get("title", "") or 'navigation' in task.get("description", "").lower():
+                if 'router.push' not in content and 'useNavigate' not in content and '<Link' not in content:
+                    warnings.append(
+                        f"{filepath} - Navigation task but no router.push/useNavigate/Link found"
+                    )
+
+        except Exception as e:
+            warnings.append(f"Could not scan {filepath}: {e}")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings
+    }
+
+
+def verify_data_loading(task):
+    """
+    Verify pages load data on mount (useEffect calling load function).
+
+    For -DATA tasks, scan modified page files for:
+    1. useEffect that calls a load/fetch function
+    2. Loading state handling
+    3. Error state handling
+    4. Empty state handling
+
+    Returns: {"valid": bool, "errors": list, "warnings": list}
+    """
+    import re
+    import os
+
+    errors = []
+    warnings = []
+
+    files_to_scan = task.get("files_affected", [])
+
+    for file_info in files_to_scan:
+        filepath = file_info.get("path", file_info) if isinstance(file_info, dict) else file_info
+
+        # Only scan page/component files
+        if not any(filepath.endswith(ext) for ext in ['.ts', '.tsx', '.js', '.jsx']):
+            continue
+
+        # Focus on page files
+        is_page = 'page' in filepath.lower() or '/pages/' in filepath or '/app/' in filepath
+
+        if not is_page:
+            continue
+
+        if not os.path.exists(filepath):
+            continue
+
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read()
+
+            # Check for useEffect with data loading
+            has_use_effect = 'useEffect' in content
+            has_data_call = any(pattern in content for pattern in [
+                'load', 'fetch', 'get', 'query', 'useQuery'
+            ])
+
+            # Pattern: useEffect(() => { loadData() }, [])
+            use_effect_with_load = re.search(
+                r'useEffect\s*\(\s*\(\)\s*=>\s*\{[^}]*(?:load|fetch|get|query)[^}]*\}',
+                content,
+                re.IGNORECASE | re.DOTALL
+            )
+
+            # Also check for React Query / SWR patterns
+            has_react_query = 'useQuery' in content or 'useSWR' in content
+
+            if not use_effect_with_load and not has_react_query:
+                # Check if there's any data dependency
+                if has_data_call:
+                    errors.append(
+                        f"{filepath} - Has data fetching code but no useEffect to trigger on mount.\n"
+                        f"    Data loading tasks MUST have useEffect that calls load function on mount."
+                    )
+
+            # Check for loading state
+            if 'loading' not in content.lower() and 'isLoading' not in content:
+                warnings.append(
+                    f"{filepath} - No loading state found. Consider showing a skeleton/spinner."
+                )
+
+            # Check for error state
+            if 'error' not in content.lower() and 'Error' not in content:
+                warnings.append(
+                    f"{filepath} - No error state handling. Consider showing error message with retry."
+                )
+
+            # Check for empty state
+            if 'empty' not in content.lower() and 'no data' not in content.lower():
+                warnings.append(
+                    f"{filepath} - No empty state handling. Consider showing helpful empty state UI."
+                )
+
+        except Exception as e:
+            warnings.append(f"Could not scan {filepath}: {e}")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings
+    }
+```
+
+### Integration into TDD Workflow
+
+Add these checks to `execute_task_tdd()` after E2E verification:
+
+```python
+    # Phase 5: WIRING VERIFICATION (for -WIRE and -DATA tasks)
+    if is_wiring_task(task):
+        print(f"\n🔌 Phase 5/5: Handler Wiring Verification for {task['id']}...")
+
+        wiring_result = verify_handler_wiring(task)
+
+        if wiring_result["warnings"]:
+            print("  ⚠️ Warnings (non-blocking):")
+            for w in wiring_result["warnings"][:5]:
+                print(f"    - {w}")
+
+        if not wiring_result["valid"]:
+            print("\n" + "=" * 60)
+            print("❌ HANDLER WIRING VERIFICATION FAILED")
+            print("=" * 60)
+            print("\nStub handlers detected in your code. Handlers must perform")
+            print("real actions, not console.log() or empty functions.\n")
+            print("Errors found:")
+            for e in wiring_result["errors"]:
+                print(f"  ❌ {e}")
+            print("\n" + "=" * 60)
+            print("REQUIRED FIX:")
+            print("  1. Replace console.log() handlers with real actions")
+            print("  2. Navigation handlers: use router.push() or <Link>")
+            print("  3. API handlers: call the actual API method")
+            print("  4. Modal handlers: set modal state to true")
+            print("=" * 60)
+
+            return {
+                "status": "failed",
+                "error": "Handler wiring verification failed - stub handlers detected"
+            }
+
+        print("  ✅ Handler wiring verification passed (no stubs)")
+
+    if is_data_loading_task(task):
+        print(f"\n📊 Phase 5/5: Data Loading Verification for {task['id']}...")
+
+        data_result = verify_data_loading(task)
+
+        if data_result["warnings"]:
+            print("  ⚠️ Warnings (non-blocking):")
+            for w in data_result["warnings"][:5]:
+                print(f"    - {w}")
+
+        if not data_result["valid"]:
+            print("\n" + "=" * 60)
+            print("❌ DATA LOADING VERIFICATION FAILED")
+            print("=" * 60)
+            print("\nPages must load data on mount. Common issues:")
+            print("  - Missing useEffect to trigger data loading")
+            print("  - Data is defined but never loaded into state")
+            print("  - Page renders empty array instead of calling API\n")
+            print("Errors found:")
+            for e in data_result["errors"]:
+                print(f"  ❌ {e}")
+            print("\n" + "=" * 60)
+            print("REQUIRED FIX:")
+            print("  useEffect(() => {")
+            print("    loadData();")
+            print("  }, [loadData]);")
+            print("=" * 60)
+
+            return {
+                "status": "failed",
+                "error": "Data loading verification failed - missing useEffect"
+            }
+
+        print("  ✅ Data loading verification passed")
+```
+
+### Example: Detected Stub Handler
+
+```
+❌ HANDLER WIRING VERIFICATION FAILED
+============================================================
+
+Stub handlers detected in your code. Handlers must perform
+real actions, not console.log() or empty functions.
+
+Errors found:
+  ❌ src/components/MiaCard.tsx:45 - onClick handler is console.log() stub
+      Found: onClick={() => console.log("Start:", taskId)}...
+
+  ❌ src/components/MiaCard.tsx:52 - onStart handler is empty arrow function
+      Found: onStart={() => {}}...
+
+============================================================
+REQUIRED FIX:
+  1. Replace console.log() handlers with real actions
+  2. Navigation handlers: use router.push() or <Link>
+  3. API handlers: call the actual API method
+  4. Modal handlers: set modal state to true
+============================================================
 ```
 
 ## Step 7D: Beads Issue Management

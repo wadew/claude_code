@@ -827,6 +827,8 @@ def split_task_for_retry(task, task_id):
     return subtasks
 ```
 
+**Note**: Workers execute TDD phases using the `sprint-worker` agent, which includes an efficiency self-check during the REFACTOR phase. This ensures code quality before task completion without blocking parallel execution.
+
 ## Step 3F: Task Failure Handler
 
 ```python

@@ -674,7 +674,167 @@ Redirect to /dashboard
 - Add Suspense boundary with loading skeleton
 ```
 
-## Step 2D: Create Component Dependency Graph
+## Step 2D: Event Flow Documentation (REQUIRED)
+
+**CRITICAL**: This section captures the **behavioral layer** - what each interactive element DOES, not just what it looks like. Without this documentation, implementation will use placeholder handlers like `console.log()` instead of real actions.
+
+For EVERY interactive element in each component (buttons, links, forms, checkboxes), document:
+
+### Step 2D.1: Identify All Interactive Elements
+
+Scan UXCanvas designs and component code for:
+- `<Button>`, `<button>` elements
+- `onClick`, `onSubmit`, `onChange`, `onStart`, `onEdit`, `onDelete` handlers in props
+- Links (`<Link>`, `<a>`, navigation elements)
+- Form submission actions
+- Checkbox/toggle state changes
+- Tab switching elements
+
+### Step 2D.2: Create Event Flow Table
+
+For EACH interactive element, create a row in the Event Flow table:
+
+```markdown
+## Event Flow Documentation
+
+| Component | Element | Handler Prop | Action Type | Target/Endpoint | API Call | SRS Ref |
+|-----------|---------|--------------|-------------|-----------------|----------|---------|
+| MiaCard | "Start Now" button | onStart | Navigate | /tasks/{taskId} | None | FR-xxx |
+| MiaCard | "Review Goals" button | onReviewGoals | Navigate | /goals | None | FR-xxx |
+| MiaCard | "Add Task" button | onAddTask | Open Modal | QuickCaptureModal | None | FR-xxx |
+| Dashboard | "Write Entry" link | onWriteEntry | Navigate | /journal | None | FR-xxx |
+| Dashboard | "Start Review" button | onStartReview | Navigate | /rituals/weekly-review | None | FR-xxx |
+| TaskCard | Checkbox | onToggleComplete | API Call + State | N/A | PATCH /tasks/{id} | FR-xxx |
+| TaskCard | "Edit" button | onEdit | Navigate | /tasks/{id}/edit | None | FR-xxx |
+| TaskCard | "Delete" button | onDelete | API Call + Confirm | N/A | DELETE /tasks/{id} | FR-xxx |
+| LoginForm | "Submit" button | onSubmit | API Call + Navigate | /dashboard | POST /auth/login | FR-xxx |
+| SearchBar | Input change | onSearch | State + Debounce API | N/A | GET /search?q= | FR-xxx |
+```
+
+### Step 2D.3: Action Type Definitions
+
+| Action Type | Description | Implementation Pattern |
+|-------------|-------------|----------------------|
+| **Navigate** | Changes route/URL | `router.push(target)` or `<Link href={target}>` |
+| **API Call** | Calls backend endpoint | `await api.endpoint()` with loading/error states |
+| **Open Modal** | Shows dialog/modal | `setModalOpen(true)` or modal component state |
+| **State Change** | Updates local/global state | `setState()` or store action |
+| **API Call + State** | Backend call + UI update | API call followed by state invalidation/update |
+| **API Call + Navigate** | Backend call then redirect | API call then `router.push()` on success |
+| **API Call + Confirm** | Confirmation dialog + API | Show confirm dialog, call API if confirmed |
+
+### Step 2D.4: Handler Implementation Specifications
+
+For each handler in the Event Flow table, specify the exact implementation:
+
+```markdown
+### Handler: MiaCard.onStart
+
+**Prop Signature**: `onStart: (taskId: string) => void`
+
+**Implementation**:
+```typescript
+const handleStart = (taskId: string) => {
+  router.push(`/tasks/${taskId}`);
+};
+```
+
+**NOT Acceptable**:
+```typescript
+// ❌ STUB - This will be flagged as incomplete
+const handleStart = (taskId: string) => {
+  console.log("Start:", taskId);
+};
+```
+
+---
+
+### Handler: TaskCard.onToggleComplete
+
+**Prop Signature**: `onToggleComplete: (taskId: string, completed: boolean) => Promise<void>`
+
+**Implementation**:
+```typescript
+const handleToggleComplete = async (taskId: string, completed: boolean) => {
+  try {
+    await taskStore.updateTask(taskId, { completed });
+    // Optimistic update already handled by store
+  } catch (error) {
+    toast.error("Failed to update task");
+    // Revert optimistic update
+  }
+};
+```
+
+**API Contract** (from SRS):
+- Endpoint: `PATCH /api/v1/tasks/{id}`
+- Request: `{ completed: boolean }`
+- Response: `{ task: Task }`
+- Error: `400 | 401 | 404 | 500`
+```
+
+### Step 2D.5: Data Loading Requirements
+
+For EACH page/screen, document what data must load on mount:
+
+```markdown
+## Page Data Loading Requirements
+
+| Page | Data Required | Store Method | API Endpoint | Load Trigger |
+|------|--------------|--------------|--------------|--------------|
+| Dashboard | User profile, Recent tasks, Metrics | loadDashboard() | GET /dashboard | useEffect on mount |
+| Tasks | Task list, Filters | loadTasks() | GET /tasks | useEffect on mount |
+| TaskDetail | Single task, Comments | loadTask(id) | GET /tasks/{id} | useEffect on id change |
+| Goals | Goals list | loadGoals() | GET /goals | useEffect on mount |
+| Settings | User settings | loadSettings() | GET /settings | useEffect on mount |
+
+### Implementation Pattern for Data Loading
+
+```typescript
+// ✅ CORRECT - Data loads on mount
+export function TasksPage() {
+  const { tasks, loading, error, loadTasks } = useTaskStore();
+
+  useEffect(() => {
+    loadTasks();
+  }, [loadTasks]);
+
+  if (loading) return <TasksSkeleton />;
+  if (error) return <ErrorState error={error} onRetry={loadTasks} />;
+  if (tasks.length === 0) return <EmptyState />;
+
+  return <TaskList tasks={tasks} />;
+}
+
+// ❌ INCORRECT - No data loading, shows empty array
+export function TasksPage() {
+  const { tasks } = useTaskStore();
+  // Missing useEffect to load data!
+  return <TaskList tasks={tasks} />; // Always empty
+}
+```
+```
+
+### Step 2D.6: Self-Audit Checklist
+
+Before completing /project:ui, verify:
+
+- [ ] **Every button** in UXCanvas images/component code has a row in Event Flow table
+- [ ] **Every handler prop** (onClick, onSubmit, onStart, etc.) has an "Action Type" specified
+- [ ] **Every "Navigate" action** has a "Target" route specified
+- [ ] **Every "API Call" action** references the endpoint from SRS
+- [ ] **Every page** has data loading requirements documented
+- [ ] **Empty states** have their buttons documented too
+- [ ] **No handlers** are left as "TBD" or unspecified
+
+**BLOCKING**: UI Implementation Plan is INCOMPLETE if any interactive element lacks:
+1. Action Type specification
+2. Target/Endpoint for the action
+3. Implementation pattern (for complex handlers)
+
+This Event Flow Documentation feeds directly into `/project:scrum` to generate explicit wiring tasks (T-xxx-WIRE) that ensure handlers are implemented correctly, not left as `console.log()` stubs.
+
+## Step 2E: Create Component Dependency Graph
 
 After analyzing all components, create dependency graph:
 
